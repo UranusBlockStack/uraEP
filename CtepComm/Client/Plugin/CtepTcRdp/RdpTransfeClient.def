@@ -1,0 +1,4 @@
+LIBRARY
+
+EXPORTS 
+        VirtualChannelEntry @1
