@@ -8,7 +8,7 @@
 #define DbgPrintf(...)
 #endif
 
-
+#include "CommonInclude/Tools/MoudlesAndPath.h"
 class CLoadModules
 {
 #define   MAXCOUNT_TRANS_MODULES 16 // 最多管理的模块总数
@@ -66,9 +66,8 @@ public:
 		
 		GetNameCover* pI = 0;
 
-		if ( !GetModuleFileName(GetModuleHandle(0), TargetDirectory, MAX_PATH))
+		if ( !GetSelfDir(TargetDirectory))
 			return 0-GetLastError();
-		*(1+wcsrchr(TargetDirectory, L'\\')) = NULL;
 		if ( Directory)
 		{
 			wcscat_s(TargetDirectory, Directory);
@@ -113,8 +112,16 @@ public:
 
 		do
 		{
-			DbgPrintf("Debug: %s file name: %ws\n", __FUNCTION__, FindFileData.cFileName);
-			hModule = LoadLibrary(FindFileData.cFileName);
+			WCHAR Path[MAX_PATH+1];
+			GetSelfDir(Path);
+			if ( Directory)
+			{
+				wcscat_s(Path, Directory);
+				wcscat_s(Path, L"\\");
+			}
+			wcscat_s(Path, FindFileData.cFileName);
+			DbgPrintf("Debug: %s file name: %ws\n", __FUNCTION__, Path);
+			hModule = LoadLibrary(Path);
 			if ( !hModule)
 				continue;
 
@@ -140,10 +147,14 @@ public:
 				{
 					m_TS[m_TransCount++] = (ICTEPTransferProtocolServer*)pI;
 				}
+				DbgPrintf("Debug: %s file name:[%ws] TransName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
 			}
 			else
 			{
 				m_APP[m_AppCount++] = (ICTEPAppProtocol*)pI;
+				DbgPrintf("Debug: %s file name:[%ws] AppName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
 			}
 		}
 		while ( FindNextFile(hDirectory, &FindFileData));

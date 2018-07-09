@@ -59,7 +59,7 @@ int main(int nArg, CHAR* Arg[])
 		}
 	}
 
-	HANDLE hEvt = CreateEvent(0, TRUE, FALSE, "TestTcpClient.Limb.1");
+	HANDLE hEvt = CreateEvent(0, TRUE, FALSE, L"TestTcpClient.Limb.1");
 	assert(hEvt);
 	DWORD dwErr = GetLastError();
 	if ( dwErr !=  ERROR_ALREADY_EXISTS)

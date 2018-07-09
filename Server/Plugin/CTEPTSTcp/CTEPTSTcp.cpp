@@ -31,7 +31,6 @@ CTransProTcpSvr::~CTransProTcpSvr()
 	::WSACleanup();
 }
 
-
 // 支持完成端口
 HRESULT CTransProTcpSvr::InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack)
 {
@@ -98,12 +97,7 @@ HRESULT CTransProTcpSvr::InitializeCompletePort(ICTEPTransferProtocolCallBack* p
 		goto End;
 	}
 
-	// 注册FD_ACCEPT事件。
-	// 如果投递的AcceptEx I/O不够，线程会接收到FD_ACCEPT网络事件，说明应该投递更多的AcceptEx I/O
-	if ( SOCKET_ERROR == WSAEventSelect(m_sListen, piCallBack->GetListenEvent(), FD_ACCEPT))
-		hr = S_FALSE;	// 有警告,正确返回
-	else
-		hr = S_OK;
+	hr = S_OK;
 
 End:
 	if ( FAILED(hr))
@@ -204,53 +198,50 @@ long CTransProTcpSvr::GetDuration(ReadWritePacket* pPacket)
 
 	return nSeconds;
 }
-HRESULT CTransProTcpSvr::PostRecv(StTransferChannel* pTransChn, bool bFirst)
+HRESULT CTransProTcpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
-	if ( INVALID_SOCKET == m_sListen || !m_piCallBack)
+	if ( !m_piCallBack)
 	{
+		ASSERT(0);
 		return E_FAIL;
 	}
 
-	ReadWritePacket *pBuffer = m_piCallBack->AllocatePacket((ICTEPTransferProtocolServer*)this);
-	if( pBuffer)
+	if( !pPacket)
+		return E_FAIL;
+	// 设置I/O类型
+	pPacket->opType = EmPacketOperationType::OP_IocpRecv;
+
+	// 投递此重叠I/O
+	DWORD dwFlags = 0;
+	WSABUF buf = {pPacket->buff.maxlength, pPacket->buff.buff};
+	if(::WSARecv(pTransChn->s, &buf, 1, 0, &dwFlags, &pPacket->ol, NULL) != NO_ERROR)
 	{
-		::EnterCriticalSection(&pTransChn->Lock);
-
-		// 设置I/O类型
-		pBuffer->opType = EmPacketOperationType::OP_Recv;
-
-		// 投递此重叠I/O
-		DWORD dwBytes;
-		DWORD dwFlags = 0;
-		WSABUF buf = {pBuffer->buff.maxlength, pBuffer->buff.buff};
-		if(::WSARecv(pTransChn->s, &buf, 1, &dwBytes, &dwFlags, &pBuffer->ol, NULL) != NO_ERROR)
+		if(::WSAGetLastError() != WSA_IO_PENDING)
 		{
-			if(::WSAGetLastError() != WSA_IO_PENDING)
-			{
-				::LeaveCriticalSection( &pTransChn->Lock);
-				m_piCallBack->FreePacket(pBuffer);
-
-				return E_FAIL;
-			}
+			return E_FAIL;
 		}
 
-		// 增加套节字上的重叠I/O计数和读序列号计数
-		::LeaveCriticalSection(&pTransChn->Lock);
-		return S_OK;
+		return ERROR_IO_PENDING;
 	}
 
-	return E_FAIL;
+	return S_OK;
 }
 
-HRESULT CTransProTcpSvr::PostSend(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTransProTcpSvr::PostSend(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	// 设置I/O类型，增加套节字上的重叠I/O计数
-	pPacket->opType = EmPacketOperationType::OP_Send;
+#ifdef _DEBUG
+	USHORT* pCountPacket = (USHORT*)pPacket->buff.buff;
+	ASSERT(*pCountPacket == pPacket->buff.size);
+	ASSERT(pPacket->opType == EmPacketOperationType::OP_IocpSend);
+#endif // _DEBUG
+	pPacket->opType = EmPacketOperationType::OP_IocpSend;
 
 	// 投递此重叠I/O
 	DWORD dwBytes;
 	DWORD dwFlags = 0;
 	WSABUF buf = {pPacket->buff.size, pPacket->buff.buff};
+	ASSERT(buf.buf == pPacket->buff.buff && buf.len == pPacket->buff.size);
 	if( NO_ERROR != ::WSASend(pTransChn->s, &buf, 1, &dwBytes, dwFlags, &pPacket->ol, NULL))
 	{
 		long dwErr = (long)::WSAGetLastError();
@@ -260,13 +251,17 @@ HRESULT CTransProTcpSvr::PostSend(StTransferChannel* pTransChn, ReadWritePacket*
 			m_log.FmtErrorW(3, L"PostSend failed. ErrCode:%d", dwErr);
 			return 0 - dwErr;
 		}
+		else
+		{
+			return ERROR_IO_PENDING;
+		}
 	}
-
 	return S_OK;
 }
 
-HRESULT CTransProTcpSvr::CompleteListen(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTransProTcpSvr::CompleteListen(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
+	ASSERT(pPacket->opType == EmPacketOperationType::OP_Listen);
 	// 取得客户地址
 	int nLocalLen, nRmoteLen;
 	LPSOCKADDR pLocalAddr, pRemoteAddr;
@@ -290,106 +285,7 @@ HRESULT CTransProTcpSvr::CompleteListen(StTransferChannel* pTransChn, ReadWriteP
 }
 
 
-// 不支持完成端口的
-HRESULT CTransProTcpSvr::Initialize(ICTEPTransferProtocolCallBack* piCallBack)
-{
-	HRESULT hr = E_FAIL;
-	HANDLE hReturn = NULL;
-	GUID GuidAcceptEx = WSAID_ACCEPTEX;
-	GUID GuidGetAcceptExSockaddrs = WSAID_GETACCEPTEXSOCKADDRS;
-	int iResult;
-
-	m_piCallBack = piCallBack;
-
-	m_sListen = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if ( m_sListen == INVALID_SOCKET )
-	{
-		return E_FAIL;
-	}
-
-	// 填充sockaddr_in结构
-	sockaddr_in sin;
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(m_uPort);
-	sin.sin_addr.S_un.S_addr = INADDR_ANY;
-
-	iResult = ::bind(m_sListen, (LPSOCKADDR)&sin, sizeof(sin));
-	if (iResult == SOCKET_ERROR)
-		goto End;
-
-	iResult = listen(m_sListen, MAX_LISTEN_CONNECTION);
-	if (iResult == SOCKET_ERROR)
-		goto End;
-
-
-	return S_OK;
-End:
-	if ( FAILED(hr))
-	{
-		::closesocket(m_sListen);
-		m_sListen = INVALID_SOCKET;
-
-		m_piCallBack = NULL;
-	}
-
-	return hr;
-}
-HRESULT CTransProTcpSvr::Listen(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
-{
-	sockaddr_in remoteAddr; 
-	int nAddrLen = sizeof(remoteAddr);
-
-	pTransChn->s = ::accept(m_sListen,(SOCKADDR*)&remoteAddr, &nAddrLen );
-	if( pTransChn->s == INVALID_SOCKET)
-	{
-		return E_FAIL;
-	}
-	return S_OK;
-
-}
-
-//公共的
-HRESULT CTransProTcpSvr::Recv(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
-{
-	pPacket->buff.size = 0;
-	int iRecv = ::recv(pTransChn->s, pPacket->buff.buff, pPacket->buff.maxlength, 0);
-	DWORD dwErr = WSAGetLastError();
-	if(  iRecv > 0 || dwErr == WSAETIMEDOUT)
-	{
-		pPacket->buff.size = iRecv;
-		return S_OK;
-	}
-
-	return E_FAIL;
-}
-
-
-HRESULT CTransProTcpSvr::Send(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
-{
-	HRESULT         hr = S_OK;
-
-	int             bytesSent = 0;
-	DWORD           &dwBufferSize = pPacket->buff.size;
-	DWORD           dwAlreadySend = 0;
-
-	while (dwAlreadySend < dwBufferSize)
-	{
-		bytesSent = ::send( pTransChn->s
-			, pPacket->buff.buff+dwAlreadySend
-			, dwBufferSize - dwAlreadySend
-			, 0);
-		if( bytesSent ==  SOCKET_ERROR || bytesSent <= 0 )
-		{
-			hr = E_FAIL;
-			break;
-		}
-		dwAlreadySend += bytesSent;
-	}
-
-	return hr;
-}
-
-HRESULT CTransProTcpSvr::Disconnect(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTransProTcpSvr::Disconnect(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	if ( pPacket && pTransChn)
 	{

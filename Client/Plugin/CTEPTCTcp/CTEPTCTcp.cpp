@@ -30,12 +30,12 @@ CTransProTcpClt::~CTransProTcpClt()
 
 HRESULT CTransProTcpClt::Initialize(ICTEPTransferProtocolClientCallBack* pI)
 {
-	ASSERT(!m_piCallBack);
+	ASSERT(!m_piCallBack || m_piCallBack == pI);
 	m_piCallBack = pI;
 	return S_OK;
 }
 
-HRESULT CTransProTcpClt::Connect(StTransferChannel* pTransChn, ReadWritePacket* pPacket /*= 0*/)
+HRESULT CTransProTcpClt::Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket /*= 0*/)
 {
 	HRESULT hr = E_FAIL;
 	DWORD dwErr = 0;
@@ -50,6 +50,22 @@ HRESULT CTransProTcpClt::Connect(StTransferChannel* pTransChn, ReadWritePacket* 
 	pTransChn->s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if ( pTransChn->s == INVALID_SOCKET)
 		goto End;
+
+	unsigned   long   sendbufsize = 0;
+	int size = sizeof(sendbufsize);
+	iRet = getsockopt(pTransChn->s, SOL_SOCKET, SO_RCVBUF, (char*)&sendbufsize, &size);
+	if ( sendbufsize < 64*1024)
+	{
+		sendbufsize = 64*1024;
+		iRet = setsockopt(pTransChn->s, SOL_SOCKET, SO_RCVBUF, (char*)&sendbufsize, size);
+	}
+	sendbufsize = 0;
+	iRet = getsockopt(pTransChn->s, SOL_SOCKET, SO_SNDBUF, (char*)&sendbufsize, &size);
+	if ( sendbufsize < 64*1024)
+	{
+		sendbufsize = 64*1024;
+		iRet = setsockopt(pTransChn->s, SOL_SOCKET, SO_SNDBUF, (char*)&sendbufsize, size);
+	}
 
 	iRet = ::connect(pTransChn->s
 		 , (sockaddr*)&pTransChn->addrRemote, sizeof(pTransChn->addrRemote));
@@ -82,7 +98,7 @@ End:
 }
 
 //¹«¹²µÄ
-HRESULT CTransProTcpClt::Recv(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTransProTcpClt::Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	pPacket->buff.size = 0;
 	ASSERT(pTransChn == m_pTransChn || m_pTransChn == nullptr);
@@ -93,19 +109,26 @@ HRESULT CTransProTcpClt::Recv(StTransferChannel* pTransChn, ReadWritePacket* pPa
 	int iRecv = ::recv(pTransChn->s, pPacket->buff.buff, pPacket->buff.maxlength, 0);
 	lckRecv.Unlock();
 
-	DWORD dwErr = WSAGetLastError();
-	if(  iRecv > 0 || dwErr == WSAETIMEDOUT)
+	long lErr = WSAGetLastError();
+	if(  iRecv > 0)
 	{
+		ASSERT((DWORD)iRecv <= pPacket->buff.maxlength);
 		pPacket->buff.size = iRecv;
 		m_piCallBack->Recv(pTransChn, pPacket);
 		return S_OK;
+	}
+
+	if ( lErr > 0)
+	{
+		//ASSERT(lErr == WSAETIMEDOUT);
+		return 0 - lErr;
 	}
 
 	return E_FAIL;
 }
 
 
-HRESULT CTransProTcpClt::Send(StTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTransProTcpClt::Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	ASSERT(pTransChn == m_pTransChn || m_pTransChn == nullptr);
 	if ( m_pTransChn == nullptr)
@@ -139,7 +162,7 @@ HRESULT CTransProTcpClt::Send(StTransferChannel* pTransChn, ReadWritePacket* pPa
 	return hr;
 }
 
-HRESULT CTransProTcpClt::Disconnect(StTransferChannel* pTransChn)
+HRESULT CTransProTcpClt::Disconnect(CTransferChannel* pTransChn)
 {
 	ASSERT(pTransChn == m_pTransChn || m_pTransChn == nullptr);
 	if ( pTransChn && pTransChn->s != INVALID_SOCKET)

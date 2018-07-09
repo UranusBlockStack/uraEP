@@ -3,7 +3,7 @@
 #include <windef.h>
 #include <winsock2.h>
 
-#pragma pack(push, 4)
+#pragma pack(push, 1)
 struct CTEPPacket_Header;
 struct CTEPPacket_Init;
 struct CTEPPacket_Init_Responce;
@@ -11,38 +11,72 @@ struct CTEPPacket_Message;
 
 #pragma warning(disable:4482) //warning C4482: 使用了非标准扩展: 限定名中使用了枚举“”
 
-#define CTEP_OPTIONAL		// 可选参数,某些条件下没有
+//#define CTEP_OPTIONAL		// 可选参数,某些条件下没有
 
-#define CTEP_DEFAULT_BUFFER_SIZE		(4*1024-80)		// I/O请求的缓冲区大小
+#define CTEP_DEFAULT_BUFFER_SIZE		(4096*4-80)		// I/O请求的缓冲区大小, RDP通道在较大大小时会丢失数据
 #define CTEP_DEFAULT_BUFFER_DATA_SIZE	(CTEP_DEFAULT_BUFFER_SIZE - sizeof(CTEPPacket_Message))
 #define CTEP_PACKET_HEADER_SIZE			8
 #define CTEP_MAX_APPNAME_LENGTH			16	//include tail '\0'
 
 struct CTEPPacket_Header	// sizeof(this) == 8
 {
+// Data Define
 	WORD  PacketLength;		// include this header.
 
 	BYTE  magic;	// 'E'
 
-#define CTEP_PACKET_SEGMENT_MASK		0x03
-#define CTEP_PACKET_SEGMENT_FIRST		0x01
-#define CTEP_PACKET_SEGMENT_LAST		0x02
-#define CTEP_PACKET_SEGMENT_MIDDLE		0x00
-#define CTEP_PACKET_SEGMENT_ENTIRE		(CTEP_PACKET_SEGMENT_FIRST|CTEP_PACKET_SEGMENT_LAST)
+#define CTEP_PACKET_SEGMENT_MASK					0x03
+#define CTEP_PACKET_SEGMENT_FIRST					0x01
+#define CTEP_PACKET_SEGMENT_LAST					0x02
+#define CTEP_PACKET_SEGMENT_MIDDLE					0x00
+#define CTEP_PACKET_SEGMENT_ENTIRE					(CTEP_PACKET_SEGMENT_FIRST|CTEP_PACKET_SEGMENT_LAST)
 
-#define CTEP_PACKET_CONTENT_MASK			0xF0
-#define CTEP_PACKET_CONTENT_INIT			(0x10|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_INIT_RSP		(0x20|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_CREAT_APP		(0x30|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_CREAT_APP_RSP	(0x40|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_CLOSE_APP		(0x50|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_CLOSE_APP_RSP	(0x60|CTEP_PACKET_SEGMENT_ENTIRE)
-#define CTEP_PACKET_CONTENT_MESSAGE			(0x70)
-
+#define CTEP_PACKET_CONTENT_MASK					0xF0
+#define CTEP_PACKET_CONTENT_HELLO					(0xB0|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_HELLO_RSP				(0xC0|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_INIT					(0x10|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_INIT_RSP				(0x20|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_CREAT_APP				(0x30|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_CREAT_APP_RSP			(0x40|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_CLOSE_APP				(0x50|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_CLOSE_APP_RSP			(0x60|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_MESSAGE					(0x70)
+#define CTEP_PACKET_CONTENT_MSG_LOCAL_STATIC		(0x80|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_MSG_LOCAL_BROADCAST		(0x90|CTEP_PACKET_SEGMENT_ENTIRE)
+#define CTEP_PACKET_CONTENT_MSG_LOCAL_SPECIAL		(0xA0|CTEP_PACKET_SEGMENT_ENTIRE)
 	BYTE  Type;
 
-	WORD  UserId;	// User Id (0~65534), (WORD)-1 is invalid.
+	WORD  UserId;			// User Id (0~65534), (WORD)-1 is invalid.
 	WORD  AppChannelId;		// 0~65534, (WORD)-1 is invalid.
+
+	DWORD SequenceId;
+
+// Debug
+	inline LPWSTR debugType()
+	{
+		if ( IsCloseApp())
+			return L"IsCloseApp";
+		else if ( IsCloseAppRsp())
+			return L"IsCloseAppRsp";
+		else if ( IsCreateApp())
+			return L"IsCreateApp";
+		else if ( IsCreateAppRsp())
+			return L"IsCreateAppRsp";
+		else if ( IsHello())
+			return L"IsHello";
+		else if ( IsHelloRsp())
+			return L"IsHelloRsp";
+		else if ( IsInit())
+			return L"IsInit";
+		else if ( IsInitRsp())
+			return L"IsInitRsp";
+		else if ( IsMessage())
+			return L"IsMessage";
+
+		return L"Is??????";
+	}
+
+// Function Define
 	inline bool InvalidUserId()
 	{
 		return UserId == (WORD)-1;
@@ -65,6 +99,14 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 		return (Type & CTEP_PACKET_SEGMENT_MASK) == CTEP_PACKET_SEGMENT_LAST;
 	}
 
+	inline bool IsHello()
+	{
+		return magic == 'E' && Type == CTEP_PACKET_CONTENT_HELLO;
+	}
+	inline bool IsHelloRsp()
+	{
+		return magic == 'E' && Type == CTEP_PACKET_CONTENT_HELLO_RSP;
+	}
 	inline bool IsInit()
 	{
 		return magic == 'E' && Type == CTEP_PACKET_CONTENT_INIT;
@@ -121,6 +163,27 @@ inline int Create_CTEPPacket_Header(CTEPPacket_Header* pBuffer, USHORT PacketLen
 	return PacketLength;
 }
 
+// this packet is handshake
+struct CTEPPacket_Hello
+{
+	// PacketLength = sizeof(CTEPPacket_Hello)
+	// Type : CTEP_PACKET_CONTENT_HELLO / CTEP_PACKET_CONTENT_HELLO_RSP
+	CTEPPacket_Header	header;
+	WCHAR				msg[32];
+};
+inline int Create_CTEPPacket_Hello(CTEPPacket_Hello* pBuffer, LPCWSTR msg, BOOL bResponse = TRUE)
+{
+	BYTE type = CTEP_PACKET_CONTENT_HELLO;
+	if ( bResponse)
+		type = CTEP_PACKET_CONTENT_HELLO_RSP;
+
+	wcscpy_s(pBuffer->msg, 31, msg);
+	pBuffer->msg[31] = 0;
+	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
+		, sizeof(CTEPPacket_Hello), type, (WORD)-1, (WORD)-1);
+}
+
+
 // this packet is send from CTEP-Client to CTEP-Server
 struct CTEPPacket_Init
 {
@@ -140,7 +203,7 @@ struct CTEPPacket_Init
 	}
 };
 inline int Create_CTEPPacket_Init(CTEPPacket_Init* pBuffer
-	, USHORT UserIdAttached = (USHORT)-1, const GUID guid = GUID_NULL)
+	, USHORT UserIdAttached = (USHORT)-1, const GUID& guid = GUID_NULL)
 {
 	pBuffer->guidUserSession = guid;
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
@@ -181,7 +244,7 @@ inline int Create_CTEPPacket_Init_Responce(CTEPPacket_Init_Responce* pBuffer, US
 	pBuffer->TcpPort = TcpPort;
 	pBuffer->UdpPort = UdpPort;
 	pBuffer->IPv4Count = ipv4Count;
-	memcpy(pBuffer->wsUserName, wsUserName, 260*sizeof(WCHAR));
+		wcscpy_s(pBuffer->wsUserName, 260, wsUserName);
 	if ( ipv4Count>0)
 	{
 		memcpy(pBuffer->IPv4, ipv4, ipv4Count*sizeof(IN_ADDR));
@@ -195,7 +258,7 @@ struct CTEPPacket_Message
 {
 	// Type : CTEP_PACKET_CONTENT_MESSAGE | CTEP_PACKET_SEGMENT_???
 	CTEPPacket_Header	header;
-	CTEP_OPTIONAL DWORD entireLength;	// NeedAssemble() == true
+	DWORD entireLength;	// NeedAssemble() == true
 #pragma warning(suppress:4200)	//warning C4200: 使用了非标准扩展 : 结构/联合中的零大小数组
 	CHAR				data[0];
 
@@ -242,10 +305,8 @@ inline int Create_CTEPPacket_Message(CTEPPacket_Message* pBuffer, USHORT UserId,
 	, char* data, USHORT length, DWORD dwEntireSize = 0
 	, bool bFirst = true, bool bLast = true)
 {
-	ASSERT(length <= CTEP_DEFAULT_BUFFER_DATA_SIZE);
+	ASSERT(length <= CTEP_DEFAULT_BUFFER_DATA_SIZE && length > 0);
 	ASSERT(dwEntireSize == 0 || dwEntireSize > length);
-
-	
 
 	BYTE Type = CTEP_PACKET_CONTENT_MESSAGE;
 	if ( bFirst) Type |= CTEP_PACKET_SEGMENT_FIRST;
@@ -254,17 +315,21 @@ inline int Create_CTEPPacket_Message(CTEPPacket_Message* pBuffer, USHORT UserId,
 	USHORT dwPacketSize;
 	if ( dwEntireSize != 0)
 	{
-		memcpy(pBuffer->data, data, length);
 		pBuffer->entireLength = dwEntireSize;
 		dwPacketSize = sizeof(CTEPPacket_Message) + length;
 	}
 	else
 	{
-		memcpy((&pBuffer->header + 1), data, length);
 		dwPacketSize = sizeof(CTEPPacket_Header) + length;
 	}
 
-	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer, dwPacketSize, Type, UserId, AppId);
+	int iResult = Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer, dwPacketSize, Type, UserId, AppId);
+	if ( data)
+	{
+		memmove(pBuffer->GetBuffer(), data, length);
+	}
+
+	return iResult;
 }
 
 struct CTEPPacket_CreateApp
@@ -293,7 +358,7 @@ struct CTEPPacket_CreateAppRsp
 	USHORT				uPacketOption;
 	USHORT				ePacketLevel;
 	char				AppName[16];
-	USHORT				StaticAppChannelId;	// 保存被创建应用所对应静态通道的ID, 如果创建的是静态通道,那么ID为它本身
+	USHORT				StaticAppChannelId;	// 保存被创建应用所对应静态通道的ID, 如果创建的是静态通道,那么ID为它本身 or (USHORT)-1
 	USHORT				bResult;	// 1:TRUE, 0:FALSE
 };
 inline int Create_CTEPPacket_CreateAppRsp(CTEPPacket_CreateAppRsp *pBuffer, USHORT UserId, USHORT AppId

@@ -17,11 +17,11 @@ public:
 	virtual HRESULT Initialize(ICTEPTransferProtocolClientCallBack* pI) override;
 	virtual void Final() override;
 
-	virtual HRESULT Connect(StTransferChannel* pTransChn, ReadWritePacket* pPacket = 0) override;
-	virtual HRESULT Disconnect(StTransferChannel* pTransChn) override;// RDP返回: E_NOTIMPL
+	virtual HRESULT Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket = 0) override;
+	virtual HRESULT Disconnect(CTransferChannel* pTransChn) override;// RDP返回: E_NOTIMPL
 
-	virtual HRESULT Send(StTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
-	virtual HRESULT Recv(StTransferChannel* pTransChn, ReadWritePacket* pPacket) override;	// TCP/UDP, RDP不支持,返回E_NOIMPL
+	virtual HRESULT Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	virtual HRESULT Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;	// TCP/UDP, RDP不支持,返回E_NOIMPL
 
 
 private:
@@ -30,7 +30,7 @@ private:
 	USHORT m_uPort;
 	ICTEPTransferProtocolClientCallBack* m_piCallBack;
 
-	StTransferChannel* volatile m_pTransChn;
+	CTransferChannel* volatile m_pTransChn;
 
 	_LiMB::CMyCriticalSection lckSend;
 	_LiMB::CMyCriticalSection lckRecv;

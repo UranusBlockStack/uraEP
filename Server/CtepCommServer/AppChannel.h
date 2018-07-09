@@ -14,6 +14,7 @@ class CCtepCommunicationServer
 {
 	Log4CppLib m_log;
 
+	FastQueue<CAppChannelEx> m_queFreeAppChn;
 	SerialNumColl<CUserDataEx*, USHORT> m_smapUser;
 	SerialNumColl<CAppChannelEx*, USHORT> m_smapAppChn;
 
@@ -23,6 +24,10 @@ class CCtepCommunicationServer
 public:
 	CCtepCommunicationServer():m_log("Svr")
 	{
+		CAppChannelEx* pAppChn = new CAppChannelEx();
+		pAppChn->Recycling();
+		m_queFreeAppChn.Initialize(pAppChn, TRUE, TRUE, 150);
+
 		m_nIPv4Count = sizeof(m_LocalIPv4)/sizeof(m_LocalIPv4[0]);
 		AdapterInfomation::RetrieveAdapterIPv4(m_LocalIPv4, m_nIPv4Count);
 	}
@@ -31,73 +36,113 @@ public:
 //interface ICTEPAppProtocolCallBack
 	virtual CAppChannel* LockChannel(USHORT AppChannelId) override
 	{
-		CAppChannelEx* pFind = m_smapAppChn.Find(AppChannelId);
-		if ( pFind && pFind->pUser)
-		{
-			CUserDataEx* pUserEx = (CUserDataEx*)pFind->pUser;
-			pUserEx->Lock();
-			if ( pUserEx->bClosing)
-			{
-				pUserEx->Unlock();
-				pFind = nullptr;
-			}
-		}
-		return pFind;
+		LOCK(&m_smapAppChn);
+		CAppChannelEx* pAppChannel = m_smapAppChn.Find(AppChannelId);
+		if ( !pAppChannel)
+			return nullptr;
+
+		CUserDataEx* pUserEx = (CUserDataEx*)pAppChannel->pUser;
+		if ( !pUserEx || pUserEx->bClosing)
+			return nullptr;
+
+		pAppChannel->Lock();
+		return pAppChannel;
 	}
+
 	virtual void UnlockChannel(CAppChannel* pAppChannel) override
 	{
-		if ( pAppChannel && pAppChannel->pUser)
+		ASSERT(pAppChannel);
+		if ( pAppChannel)
 		{
-			((CUserDataEx*)pAppChannel->pUser)->Unlock();
+			((CAppChannelEx*)pAppChannel)->Unlock();
 		}
 	}
 
-	virtual ReadWritePacket*	MallocPacket(CAppChannel *pAppChn, ULONG size = 0) override// 创建发送包内存
+	virtual ReadWritePacket*	MallocSendPacket(CAppChannel *pAppChn, USHORT size) override// 创建发送包内存
 	{
-		return AllocateBuffer(pAppChn->pTransChannel, EmPacketOperationType::OP_Send, size);
+		ASSERT(size <= CTEP_DEFAULT_BUFFER_DATA_SIZE);
+		if ( size > CTEP_DEFAULT_BUFFER_DATA_SIZE)
+			return nullptr;
+
+		CUserData* pUser = ((CAppChannelEx*)pAppChn)->pUser;
+		ReadWritePacket* pBuffer = AllocateBuffer(
+			((CAppChannelEx*)pAppChn)->pTransChannel, EmPacketOperationType::OP_IocpSend, 0);
+		if ( pBuffer)
+		{
+			CTEPPacket_Message* pMsg = (CTEPPacket_Message*)pBuffer->buff.buff;
+			pBuffer->buff.size = Create_CTEPPacket_Message(pMsg, pUser->UserId, pAppChn->AppChannelId, 0, size);
+
+			pBuffer->pointer = pMsg->GetBuffer();
+		}
+
+		return pBuffer;
 	}
 	virtual void FreePacket(ReadWritePacket *p) override
 	{
 		ReleaseBuffer(p);
 	}
-
+	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size) override
+	{
+		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		if ( pAppChannel)
+		{
+			HRESULT hr = WritePacket(pAppChannel, buff, size);
+			UnlockChannel(pAppChannel);
+			return hr;
+		}
+		return E_INVALIDARG;
+	}
 	virtual HRESULT WritePacket(CAppChannel *pAppChn, char* buff, ULONG size) override;
 	virtual HRESULT WritePacket(CAppChannel *pAppChn, ReadWritePacket *pPacket) override
 	{
-		BOOL bRet = SendPacket((StTransferChannelEx*)pAppChn->pTransChannel, pPacket, pAppChn->Level);
+		BOOL bRet = SendPacket(((CAppChannelEx*)pAppChn)->pTransChannel, pPacket, pAppChn->Level);
 		return bRet ? S_OK : E_FAIL;
 	}
 
 	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pStaticChannel
 		 , EmPacketLevel level = Middle, USHORT option = NULL) override;// CAppChannel::uPacketOption option
 	virtual void	CloseDynamicChannel(CAppChannel* pDynamicChannel) override;
+	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId) override
+	{
+		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		if ( pAppChannel)
+		{
+			CloseDynamicChannel(pAppChannel);
+			UnlockChannel(pAppChannel);
+			return S_OK;
+		}
+		return E_NOTFOUND;
+	}
 
 private://internal function
-// 	CAppChannelEx* CreateStaticChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt
-// 		, EmPacketLevel level = Middle, USHORT option = 0);// CAppChannel::uPacketOption option
-	void	CloseStaticChannel(CAppChannel* pStaticChannel);
+	void	closeStaticChannel(CAppChannel* pStaticChannel);
 
 	inline void closeAppChannel(CAppChannel* pAppChannel);			// close static channel.
 
-	CAppChannel* allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt
+	CAppChannelEx* allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt, LPCSTR sAppName
 		, CAppChannelEx *pStaAppChn = nullptr, EmPacketLevel level = Middle, USHORT option = 0);
-	void releaseAppChannel(CAppChannel* pAppChn);
+	void releaseAppChannel(CAppChannelEx* pAppChnEx);
 
-	CUserDataEx* allocateUser(StTransferChannelEx* pTransChnMain);
+	CUserDataEx* allocateUser(CTransferChannelEx* pTransChnMain);
 	void releaseUser(CUserDataEx* pUserEx);
+
+	inline ReadWritePacket*	MallocPacket(CAppChannel *pAppChn, ULONG size)// 创建发送包内存
+	{
+		return AllocateBuffer(((CAppChannelEx*)pAppChn)->pTransChannel, EmPacketOperationType::OP_IocpSend, size);
+	}
 
 private:// Event Impl
 	virtual BOOL OnStart() override;
 	virtual void OnShutdown() override;
 
-	virtual void OnConnectionEstablished(StTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
-	virtual void OnReadCompleted(StTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
-	virtual void OnConnectionClosing(StTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
+	virtual void OnConnectionEstablished(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
+	virtual void OnReadCompleted(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
+	virtual void OnConnectionClosing(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) override;
 #ifdef _DEBUG
-	virtual BOOL OnConnectionError(StTransferChannelEx *pContext, ReadWritePacket *pBuffer, int nError) override
+	virtual BOOL OnConnectionError(CTransferChannelEx *pContext, ReadWritePacket *pBuffer, int nError) override
 	{
 		UNREFERENCED_PARAMETER(pBuffer);
-		m_log.wprint(L" 一个连接发生错误[0x%08x]： %d[0x%08x] \n ", pContext, nError, nError);
+		m_log.FmtWarning(5, L" 一个连接发生错误[0x%08x]-Socket(%d) ErrCode:%d[0x%08x] \n ", pContext, (DWORD)pContext->hFile, nError, nError);
 		return FALSE;// 返回FALSE表示不处理
 	}
 #endif // _DEBUG

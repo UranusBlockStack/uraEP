@@ -15,7 +15,7 @@
 
 #include "../../Client/CtepCommClient/CtepCommClientExport.h"
 
-int _tmain(int argc, _TCHAR* argv[])
+int main(int argc, CHAR* argv[])
 {
 	CLoadModules load;
 	load.FindMoudleInterface(CLoadModules::CtepAppClient);
@@ -23,6 +23,11 @@ int _tmain(int argc, _TCHAR* argv[])
 	ASSERT( load.m_AppCount>0 && load.m_TransCount>0 && load.m_TC[0]);
 
 	SOCKADDR_IN sock = {AF_INET, ::htons(4567), {127,0,0,1}};
+	if ( argc > 1)
+	{
+		sock.sin_addr.S_un.S_addr = ::inet_addr(argv[1]);
+	}
+
 	CTEPCommClientInitalize(load.m_TC[0], (sockaddr*)&sock, sizeof(sock));
 
 	return 0;

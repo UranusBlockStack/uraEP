@@ -13,9 +13,16 @@
 
 #include "CtepCommClient.h"
 
+#pragma comment(lib, "Ws2_32")
+
 CCtepCommClientApp gOne;
 
 HRESULT CTEPCommClientInitalize(ICTEPTransferProtocolClient* piTransProtClt, const sockaddr* soa, int size)
 {
 	return gOne.Initalize(piTransProtClt, soa, size);
+}
+
+void CTEPCommClientClose()
+{
+	gOne.Shutdown();
 }

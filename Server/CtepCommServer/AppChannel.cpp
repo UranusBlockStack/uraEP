@@ -6,25 +6,34 @@
 // class CCtepCommunicationServer
 HRESULT CCtepCommunicationServer::WritePacket(CAppChannel *pAppChn, char* buff, ULONG size)
 {
-	if ( !pAppChn || !pAppChn->pUser || ((CUserDataEx*)pAppChn->pUser)->bClosing)
+	if ( !pAppChn || pAppChn->bClosing || !pAppChn->pUser || ((CUserDataEx*)pAppChn->pUser)->bClosing)
 		return E_FAIL;
 
 	if ( !buff || size == 0)
 		return E_INVALIDARG;
 
-	DWORD nPacketCount = size / CTEP_DEFAULT_BUFFER_DATA_SIZE
-		+ (size % CTEP_DEFAULT_BUFFER_DATA_SIZE > 0 ? 1 : 0);
-
-	DWORD dwPacketHeader = 
-		nPacketCount == 1 ? sizeof(CTEPPacket_Header) : sizeof(CTEPPacket_Message);
-
 	CUserDataEx* pUser = (CUserDataEx*)pAppChn->pUser;
+	USHORT UserId = pUser->UserId;
 
-	DWORD dwSizeSent = 0;
-	for (DWORD i = 0; i < nPacketCount; i++)
+	if ( size <= CTEP_DEFAULT_BUFFER_DATA_SIZE)
 	{
-		USHORT dwPacketLength = (USHORT)min(CTEP_DEFAULT_BUFFER_DATA_SIZE, size - dwSizeSent);
-		ReadWritePacket* pPacket = MallocPacket(pAppChn, dwPacketLength);
+		ReadWritePacket* pPacket = MallocPacket(pAppChn, 0);
+		if ( !pPacket)
+		{
+			ASSERT(0);
+			return E_OUTOFMEMORY;
+		}
+		pPacket->buff.size = Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
+			, UserId, pAppChn->AppChannelId, buff, (USHORT)size);
+
+		return WritePacket(pAppChn, pPacket);
+	}
+
+	DWORD dwSizeLast = size;
+	while ( dwSizeLast > 0)
+	{
+		USHORT dwPacketLength = (USHORT)min(CTEP_DEFAULT_BUFFER_DATA_SIZE, dwSizeLast);
+		ReadWritePacket* pPacket = MallocPacket(pAppChn, 0);
 		if ( !pPacket)
 		{
 			ASSERT(0);
@@ -32,37 +41,29 @@ HRESULT CCtepCommunicationServer::WritePacket(CAppChannel *pAppChn, char* buff, 
 		}
 
 		// 填写头
-		pPacket->buff.size = dwPacketHeader + dwPacketLength;
-		if ( nPacketCount == 1)
+		if ( dwSizeLast == size)
 		{
-			Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
-				, pUser->UserId, pAppChn->AppChannelId, buff+dwSizeSent, dwPacketLength);
+			pPacket->buff.size = Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
+				, UserId, pAppChn->AppChannelId, buff, dwPacketLength
+				, size, true, false);
+		}
+		else if ( dwSizeLast <= CTEP_DEFAULT_BUFFER_DATA_SIZE)
+		{
+			pPacket->buff.size = Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
+				, UserId, pAppChn->AppChannelId, buff+(size-dwSizeLast), dwPacketLength
+				, size, false, true);
 		}
 		else
 		{
-			if ( i == 0)
-			{
-				Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
-					, pUser->UserId, pAppChn->AppChannelId, buff+dwSizeSent, dwPacketLength
-					, size, true, false);
-			}
-			else if ( i == nPacketCount - 1)
-			{
-				Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
-					, pUser->UserId, pAppChn->AppChannelId, buff+dwSizeSent, dwPacketLength
-					, size, false, true);
-			}
-			else
-			{
-				Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
-					, pUser->UserId, pAppChn->AppChannelId, buff+dwSizeSent, dwPacketLength
-					, size, false, false);
-			}
+			pPacket->buff.size = Create_CTEPPacket_Message((CTEPPacket_Message*)pPacket->buff.buff
+				, UserId, pAppChn->AppChannelId, buff+(size-dwSizeLast), dwPacketLength
+				, size, false, false);
 		}
+
 		if ( FAILED(WritePacket(pAppChn, pPacket)))
 			return E_FAIL;
 
-		dwSizeSent += dwPacketLength;
+		dwSizeLast -= dwPacketLength;
 	}
 
 	return S_OK;
@@ -74,19 +75,21 @@ CAppChannel* CCtepCommunicationServer::CreateDynamicChannel(CAppChannel* pStatic
 	, EmPacketLevel level /*= Middle*/, USHORT option /*= NULL*/)
 {
 	CAppChannelEx *pAppChnEx = (CAppChannelEx*)pStaticChannel;
+	CAppChannelEx *pStaAppChnEx = pAppChnEx->pStaticAppChannel;
 	CUserDataEx* pUserEx = (CUserDataEx*)pAppChnEx->pUser;
 
-	ASSERT(pAppChnEx && pAppChnEx->pStaticAppChannel && pUserEx);
-	if ( !pAppChnEx || !pAppChnEx->pStaticAppChannel || !pUserEx || pUserEx->bClosing)
+	ASSERT(pAppChnEx && pStaAppChnEx && pUserEx);
+	if ( !pAppChnEx || !pStaAppChnEx || !pUserEx || pUserEx->bClosing)
 		return nullptr;
 
-	CAppChannel *pNewAppChannel = allocateAppChannel((CUserDataEx*)pAppChnEx->pUser
-		, pAppChnEx->piAppProtocol, pAppChnEx->pStaticAppChannel, level, option);
+	CAppChannelEx *pNewAppChannel = allocateAppChannel((CUserDataEx*)pAppChnEx->pUser
+		, pAppChnEx->piAppProtocol, pStaAppChnEx->sAppName
+		, pAppChnEx->pStaticAppChannel, level, option);
 
 	// 发送客户端应用层动态通道建立消息
 	if ( pNewAppChannel)
 	{
-		ReadWritePacket* pPacketSend = MallocPacket(pNewAppChannel);
+		ReadWritePacket* pPacketSend = MallocPacket(pNewAppChannel, sizeof(CTEPPacket_CreateAppRsp));
 		if ( pPacketSend)
 		{
 			pPacketSend->buff.size = Create_CTEPPacket_CreateAppRsp(
@@ -98,7 +101,11 @@ CAppChannel* CCtepCommunicationServer::CreateDynamicChannel(CAppChannel* pStatic
 				, pStaticChannel->AppChannelId
 				, TRUE);
 
-			WritePacket(pNewAppChannel, pPacketSend);
+			HRESULT hr = WritePacket(pNewAppChannel, pPacketSend);
+			ASSERT(SUCCEEDED(hr));
+
+			LOCK(pNewAppChannel);
+			pAppChnEx->piAppProtocol->Connect(pAppChnEx->pUser, pNewAppChannel, pAppChnEx->pStaticAppChannel);
 		}
 		else
 		{
@@ -112,7 +119,7 @@ CAppChannel* CCtepCommunicationServer::CreateDynamicChannel(CAppChannel* pStatic
 void	CCtepCommunicationServer::CloseDynamicChannel(CAppChannel* pDynamicChannel)
 {
 	CAppChannelEx *pAppChnEx = (CAppChannelEx*)pDynamicChannel;
-	ASSERT(pAppChnEx && pAppChnEx->pStaticAppChannel && pAppChnEx != pAppChnEx->pStaticAppChannel);
+	ASSERT(pAppChnEx);
 	if ( !pAppChnEx || pAppChnEx == pAppChnEx->pStaticAppChannel)
 		return ;
 
@@ -120,7 +127,7 @@ void	CCtepCommunicationServer::CloseDynamicChannel(CAppChannel* pDynamicChannel)
 	CUserDataEx* pUserEx = (CUserDataEx*)pAppChnEx->pUser;
 	if ( pUserEx && !pUserEx->bClosing)
 	{
-		ReadWritePacket* pBuffer = MallocPacket(pDynamicChannel);
+		ReadWritePacket* pBuffer = MallocPacket(pDynamicChannel, sizeof(CTEPPacket_CloseAppRsp));
 		if ( pBuffer)
 		{
 			pBuffer->buff.size = Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer->buff.buff
@@ -134,11 +141,11 @@ void	CCtepCommunicationServer::CloseDynamicChannel(CAppChannel* pDynamicChannel)
 	releaseAppChannel(pAppChnEx);
 }
 
-void CCtepCommunicationServer::CloseStaticChannel(CAppChannel* pStaticChannel)
+void CCtepCommunicationServer::closeStaticChannel(CAppChannel* pStaticChannel)
 {
 	CUserDataEx* pUserEx = (CUserDataEx*)pStaticChannel->pUser;
 	CAppChannelEx *pStaticChn = ((CAppChannelEx*)pStaticChannel)->pStaticAppChannel;
-	ASSERT(pUserEx && pStaticChn);
+	ASSERT( pStaticChn);
 
 	ASSERT(((CAppChannelEx*)pStaticChannel)->pStaticAppChannel == pStaticChannel
 		&& pStaticChannel->Type == StaticChannel);
@@ -154,7 +161,7 @@ void CCtepCommunicationServer::CloseStaticChannel(CAppChannel* pStaticChannel)
 	// 发送客户端应用层静态通道删除消息
 	if ( pUserEx && !pUserEx->bClosing)
 	{
-		ReadWritePacket* pBuffer = MallocPacket(pStaticChannel);
+		ReadWritePacket* pBuffer = MallocPacket(pStaticChannel, sizeof(CTEPPacket_CloseAppRsp));
 		if ( pBuffer)
 		{
 			pBuffer->buff.size = Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer->buff.buff
@@ -165,7 +172,7 @@ void CCtepCommunicationServer::CloseStaticChannel(CAppChannel* pStaticChannel)
 		}
 	}
 
-	releaseAppChannel(pStaticChannel);
+	releaseAppChannel((CAppChannelEx*)pStaticChannel);
 }
 
 void CCtepCommunicationServer::closeAppChannel(CAppChannel* pAppChannel)			// close static channel.
@@ -183,57 +190,70 @@ void CCtepCommunicationServer::closeAppChannel(CAppChannel* pAppChannel)			// cl
 	}
 	else
 	{
-		CloseStaticChannel(pAppChannel);
+		closeStaticChannel(pAppChannel);
 		return ;
 	}
 }
 
-CAppChannel* CCtepCommunicationServer::allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt
+CAppChannelEx* CCtepCommunicationServer::allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt, LPCSTR sAppName
 	, CAppChannelEx *pStaAppChn /*= nullptr*/, EmPacketLevel level /*= Middle*/, USHORT option /*= 0*/)
 {
-	ASSERT(user && piAppProt);
+	ASSERT(user && piAppProt && sAppName && sAppName[0]);
 	if ( level > High)
 		level = Middle;
 	else if ( level < Low)
 		level = Low;
 
-	CAppChannelEx* pNewAppChannel = new CAppChannelEx(user, piAppProt, pStaAppChn, level, option);
-
-	pNewAppChannel->AppChannelId = m_smapAppChn.Push(pNewAppChannel);
-
-	if ( pNewAppChannel->AppChannelId == m_smapAppChn.InvalidCount())
+	CAppChannelEx* pNewAppChannel = m_queFreeAppChn.Pop();
+	if ( !pNewAppChannel)
+		pNewAppChannel = new CAppChannelEx();
+	
+	if ( pNewAppChannel)
 	{
-		releaseAppChannel(pNewAppChannel);
-		pNewAppChannel = nullptr;
+		pNewAppChannel->Initialize(user, piAppProt, sAppName, pStaAppChn, level, option);
+
+		pNewAppChannel->AppChannelId = m_smapAppChn.Push(pNewAppChannel);
+
+		if ( pNewAppChannel->AppChannelId == m_smapAppChn.InvalidCount())
+		{
+			releaseAppChannel(pNewAppChannel);
+			pNewAppChannel = nullptr;
+		}
 	}
 
 	return pNewAppChannel;
 }
-void CCtepCommunicationServer::releaseAppChannel(CAppChannel* pAppChn)
+void CCtepCommunicationServer::releaseAppChannel(CAppChannelEx* pAppChnEx)
 {
-	ASSERT(pAppChn);
-	if ( pAppChn->AppChannelId != m_smapAppChn.InvalidCount())
+	ASSERT(pAppChnEx);
+	if ( pAppChnEx->AppChannelId != m_smapAppChn.InvalidCount())
 	{
-		CAppChannelEx* pAppChnEx = (CAppChannelEx*)pAppChn;
 		if ( pAppChnEx->piAppProtocol)
 		{
-			pAppChnEx->Lock();
+			LOCK(pAppChnEx);
 			if ( pAppChnEx->piAppProtocol)
 			{
-				pAppChnEx->piAppProtocol->Disconnect(pAppChnEx->pUser, pAppChn);
+				ICTEPAppProtocol* pTempAppProt = pAppChnEx->piAppProtocol;
 				pAppChnEx->piAppProtocol = nullptr;
+				pTempAppProt->Disconnect(pAppChnEx->pUser, pAppChnEx);
 			}
-			pAppChnEx->Unlock();
 		}
 
-		m_smapAppChn.Pop(pAppChn->AppChannelId);
+		pAppChnEx = m_smapAppChn.Pop(pAppChnEx->AppChannelId);
+		if ( pAppChnEx)
+		{
+			pAppChnEx->Recycling();
+			m_queFreeAppChn.Push(pAppChnEx);
+		}
 	}
-
-	delete (CAppChannelEx*)pAppChn;
+	else
+	{
+		ASSERT(0);
+	}
 }
-CUserDataEx* CCtepCommunicationServer::allocateUser(StTransferChannelEx* pTransChnMain)
+CUserDataEx* CCtepCommunicationServer::allocateUser(CTransferChannelEx* pTransChnMain)
 {
-	ASSERT(pTransChnMain->head.pUser == nullptr);
+	ASSERT(pTransChnMain->pUser == nullptr);
 	CUserDataEx* pUserEx = new CUserDataEx(pTransChnMain, GUID_NULL);
 	UuidCreate(&pUserEx->guidUser);
 	pUserEx->UserId = m_smapUser.Push(pUserEx);
@@ -245,7 +265,8 @@ CUserDataEx* CCtepCommunicationServer::allocateUser(StTransferChannelEx* pTransC
 
 	if ( pUserEx)
 	{
-		pTransChnMain->head.pUser = pUserEx;
+		pUserEx->bClosing = FALSE;
+		pTransChnMain->pUser = pUserEx;
 	}
 
 	return pUserEx;
@@ -262,13 +283,14 @@ void CCtepCommunicationServer::releaseUser(CUserDataEx* pUserEx)
 
 
 
-void CCtepCommunicationServer::OnConnectionEstablished(StTransferChannelEx *pContext, ReadWritePacket *pBuffer)
+void CCtepCommunicationServer::OnConnectionEstablished(CTransferChannelEx *pContext, ReadWritePacket *pBuffer)
 {
-	m_log.wprint(L" 接收到一个新的连接[0x%08x]（%d）： %S \n"
-		, pContext, GetCurrentConnection(), ::inet_ntoa(pContext->head.addrRemote.sin_addr));
+	m_log.FmtMessage(5, L" 接收到一个新的连接[0x%08x] Type:[%s] Handle:%d.  All Connection Count（%d）： %S \n"
+		, pContext, debugEnTransfaerChannelType(pContext->type)
+		, (DWORD)pContext->hFile, GetCurrentConnection(), ::inet_ntoa(pContext->addrRemote.sin_addr));
 	CUserDataEx *pUserEx = nullptr;
 
-	if ( pContext->head.type == TCP)
+	if ( pContext->type == TCP)
 	{
 		if (pBuffer->buff.size != sizeof(CTEPPacket_Init))
 		{
@@ -289,6 +311,7 @@ void CCtepCommunicationServer::OnConnectionEstablished(StTransferChannelEx *pCon
 				m_log.Error(3, L"ConnectEstablished - allocateUser Failed.");
 				goto ErrorEnd;
 			}
+			m_log.print(L"TCP Make a new User: %d", pUserEx->UserId);
 		} 
 		else
 		{
@@ -316,11 +339,12 @@ void CCtepCommunicationServer::OnConnectionEstablished(StTransferChannelEx *pCon
 
 			pUserEx->Lock();
 			pUserEx->pTransChnTcp = pContext;
-			pContext->head.pUser = pUserEx;
+			pContext->pUser = pUserEx;
 			pUserEx->Unlock();
+			m_log.print(L"Tcp with old User: %d", pUserEx->UserId);
 		}
 	}
-	else if ( pContext->head.type == UDP)
+	else if ( pContext->type == UDP)
 	{
 		ASSERT(0);// Not Implement
 		pUserEx = allocateUser(pContext);
@@ -333,8 +357,7 @@ void CCtepCommunicationServer::OnConnectionEstablished(StTransferChannelEx *pCon
 
 	// 回复Init Response
 	ASSERT(pUserEx && pUserEx->pTransChnMain);
-	ReadWritePacket* pPacketSend =
-		AllocateBuffer((StTransferChannel*)pUserEx->pTransChnMain, OP_Send);
+	ReadWritePacket* pPacketSend = AllocateBuffer(pContext, OP_IocpSend);
 	if ( !pPacketSend)
 	{
 		m_log.Error(3, L"ConnectEstablished - AllocateBuffer Failed. No Enough Memory.");
@@ -347,7 +370,7 @@ void CCtepCommunicationServer::OnConnectionEstablished(StTransferChannelEx *pCon
 		, m_TS[0] ? m_TS[0]->GetPort() : 0, m_TS[1] ? m_TS[1]->GetPort() : 0
 		, m_LocalIPv4, m_nIPv4Count);
 
-	SendPacket(pContext, pPacketSend);
+	SendPacket(pContext, pPacketSend, High);
 	return ;
 
 ErrorEnd:
@@ -355,11 +378,13 @@ ErrorEnd:
 	CloseAConnection(pContext);
 }
 
-void CCtepCommunicationServer::OnConnectionClosing(StTransferChannelEx *pContext, ReadWritePacket *pBuffer)
+void CCtepCommunicationServer::OnConnectionClosing(CTransferChannelEx *pContext, ReadWritePacket *pBuffer)
 {
 	UNREFERENCED_PARAMETER(pBuffer);
-	CUserDataEx* pUserEx = (CUserDataEx*)pContext->head.pUser;
-	m_log.wprint(L" 一个连接关闭！[0x%08x] User:[0x%08x]\n", pContext, pUserEx);
+	CUserDataEx* pUserEx = (CUserDataEx*)pContext->pUser;
+	m_log.FmtMessage(5, L" 一个连接关闭:[0x%08x] Handle:%d. User:[%d]  All Connection Count（%d）： %S \n"
+		, pContext, (DWORD)pContext->hFile, pUserEx ? pUserEx->UserId : -1
+		, GetCurrentConnection(), ::inet_ntoa(pContext->addrRemote.sin_addr));
 	if ( !pUserEx)
 	{
 		ASSERT(0);
@@ -368,54 +393,61 @@ void CCtepCommunicationServer::OnConnectionClosing(StTransferChannelEx *pContext
 
 	// 考虑断开重连情况.未实现 E_NOT_IMPLEMENT
 	// 关闭用户
-	pContext->head.pUser = nullptr;
-
-	pUserEx->Lock();
-	// 关闭所有底层连接
-	if ( pUserEx->pTransChnTcp)
-	{
-		CloseAConnection(pUserEx->pTransChnTcp);
-		if ( pContext == pUserEx->pTransChnTcp)
-			pUserEx->pTransChnTcp = nullptr;
-	}
-	if ( pUserEx->pTransChnUdp)
-	{
-		CloseAConnection(pUserEx->pTransChnUdp);
-		if ( pContext == pUserEx->pTransChnUdp)
-			pUserEx->pTransChnUdp = nullptr;
-	}
-	if ( pUserEx->pTransChnMain)
-	{
-		CloseAConnection(pUserEx->pTransChnMain);
-		if ( pContext == pUserEx->pTransChnMain)
-			pUserEx->pTransChnMain = nullptr;
-	}
-
-	// 关闭该用户打开的所有应用
-	if ( !pUserEx->bClosing)
-	{
-		m_smapAppChn.Lock();
-		POSITION pos = m_smapAppChn.GetStartPosition();
-		while (pos)
-		{
-			CAppChannelEx* pFind = m_smapAppChn.GetNextValue(pos);
-			if ( pFind->pUser == (CUserData*)pUserEx)
-			{
-				closeAppChannel(pFind);
-			}
-		}
-		m_smapAppChn.Unlock();
-
-		pUserEx->bClosing = TRUE;
-	}
-
+	pContext->pUser = nullptr;
 	BOOL bCanReleaseUser = FALSE;
-	if ( !pUserEx->pTransChnMain && !pUserEx->pTransChnTcp && !pUserEx->pTransChnUdp)
+	if ( pUserEx)
 	{
-		bCanReleaseUser = TRUE;
-	}
+		LOCK(pUserEx);
+		// 关闭所有底层连接
+		if ( pUserEx->pTransChnTcp)
+		{
+			CloseAConnection(pUserEx->pTransChnTcp);
+			if ( pContext == pUserEx->pTransChnTcp)
+				pUserEx->pTransChnTcp = nullptr;
+		}
+		if ( pUserEx->pTransChnUdp)
+		{
+			CloseAConnection(pUserEx->pTransChnUdp);
+			if ( pContext == pUserEx->pTransChnUdp)
+				pUserEx->pTransChnUdp = nullptr;
+		}
+		if ( pUserEx->pTransChnMain)
+		{
+			CloseAConnection(pUserEx->pTransChnMain);
+			if ( pContext == pUserEx->pTransChnMain)
+				pUserEx->pTransChnMain = nullptr;
+		}
 
-	pUserEx->Unlock();
+		// 关闭该用户打开的所有应用
+		if ( !pUserEx->bClosing)
+		{
+			m_smapAppChn.Lock();
+			if ( !pUserEx->bClosing)
+			{
+				POSITION pos = m_smapAppChn.GetStartPosition();
+				while (pos)
+				{
+					CAppChannelEx* pFind = m_smapAppChn.GetNextValue(pos);
+					if ( pFind->pUser == (CUserData*)pUserEx)
+					{
+						m_smapAppChn.Unlock();
+
+						closeAppChannel(pFind);
+
+						m_smapAppChn.Lock();
+						pos = m_smapAppChn.GetStartPosition();
+					}
+				}
+				pUserEx->bClosing = TRUE;
+			}
+			m_smapAppChn.Unlock();
+		}
+
+		if ( !pUserEx->pTransChnMain && !pUserEx->pTransChnTcp && !pUserEx->pTransChnUdp)
+		{
+			bCanReleaseUser = TRUE;
+		}
+	}
 
 	if ( bCanReleaseUser)
 	{
@@ -423,15 +455,15 @@ void CCtepCommunicationServer::OnConnectionClosing(StTransferChannelEx *pContext
 	}
 }
 
-void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, ReadWritePacket *pBuffer)
+void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, ReadWritePacket *pBuffer)
 {
 	ASSERT(pContext && pBuffer);
 	if ( !pContext || !pBuffer)
 		return ;
 
-	m_log.wprint(L"收到一个数据包[0x%08x] . 大小:%d", pContext, pBuffer->buff.size);
+	m_log.FmtMessage(1, L"收到一个数据包[0x%08x] . 大小:%d", pContext, pBuffer->buff.size);
 
-	CUserDataEx* pUserEx = (CUserDataEx*)pContext->head.pUser;
+	CUserDataEx* pUserEx = (CUserDataEx*)pContext->pUser;
 	if ( !pUserEx || pUserEx->bClosing)
 		return ;
 
@@ -442,11 +474,14 @@ void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, Re
 		{
 			// 回复Init Response
 			ASSERT(pUserEx && pUserEx->pTransChnMain);
+			m_log.print(L"New Client Init. UserId:%d, TransChannelHandle:%d, Type:[%S]",pUserEx->UserId, pContext->hFile
+				, pContext->piTrans->GetName());
+
 			ReadWritePacket* pPacketSend =
-				AllocateBuffer((StTransferChannel*)pUserEx->pTransChnMain, OP_Send);
+				AllocateBuffer(pUserEx->pTransChnMain, OP_IocpSend);
 			if ( !pPacketSend)
 			{
-				m_log.Error(3, L"ConnectEstablished - AllocateBuffer Failed. No Enough Memory.");
+				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
 				goto ErrorEnd;
 			}
 
@@ -456,21 +491,26 @@ void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, Re
 				, m_TS[0] ? m_TS[0]->GetPort() : 0, m_TS[1] ? m_TS[1]->GetPort() : 0
 				, m_LocalIPv4, m_nIPv4Count);
 
-			SendPacket(pContext, pPacketSend);
+			SendPacket(pContext, pPacketSend, High);
 			continue;
 		}
 
-		CAppChannelEx* pAppEx = m_smapAppChn.Find(pHeader->GetAppId());
-		if ( pAppEx && pAppEx->pUser != (CUserData*)pUserEx)
+		CAppChannelEx* pAppChnEx = m_smapAppChn.Find(pHeader->GetAppId());
+		if ( pAppChnEx && pAppChnEx->pUser != (CUserData*)pUserEx)
 		{
-			ASSERT(0);// 找到的通道不属于当前用户
+			ASSERT(pAppChnEx->bClosing && pAppChnEx->pUser == nullptr);// 找到的通道不属于当前用户
 			continue;
+		}
+
+		if ( pHeader->GetAppId() != (USHORT)-1)
+		{
+			ASSERT(pAppChnEx && pAppChnEx->AppChannelId == pHeader->GetAppId());
 		}
 
 		if ( pHeader->IsCloseApp())
 		{
 			// 发送关闭回复
-			ReadWritePacket* pPacketSend = AllocateBuffer((StTransferChannel*)pContext, EmPacketOperationType::OP_Send, 0);
+			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, EmPacketOperationType::OP_IocpSend, 0);
 			if ( pPacketSend)
 			{
 				pPacketSend->buff.size = Create_CTEPPacket_Header(
@@ -478,16 +518,24 @@ void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, Re
 					, sizeof(CTEPPacket_CloseAppRsp), CTEP_PACKET_CONTENT_CLOSE_APP_RSP
 					, pUserEx->UserId, pHeader->GetAppId());
 
-				SendPacket(pContext, pPacketSend);
+				if ( pAppChnEx)
+				{
+					ASSERT(pAppChnEx->pTransChannel);
+					SendPacket(pAppChnEx->pTransChannel, pPacketSend, pAppChnEx->Level);
+				}
+				else
+				{
+					SendPacket(pContext, pPacketSend, Middle);
+				}
 			}
 			else
 			{
-				m_log.Error(3, L"ConnectEstablished - MallocPacket Failed. No Enough Memory.");
+				m_log.Error(3, L"OnReadCompleted - MallocPacket Failed. No Enough Memory.");
 			}
 
-			if ( pAppEx)
+			if ( pAppChnEx)
 			{
-				closeAppChannel(pAppEx);
+				closeAppChannel(pAppChnEx);
 			}
 			continue;
 		}
@@ -495,26 +543,46 @@ void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, Re
 		if ( pHeader->IsCreateApp())
 		{
 			CTEPPacket_CreateApp* pPacketRecv = (CTEPPacket_CreateApp*)pHeader;
-			CAppChannelEx* pNewAppChannel = nullptr;
+			ICTEPAppProtocol *piAP = nullptr;
+			LPCSTR sAppName = nullptr;
 			for (DWORD i=0; i< m_AppCount; i++)
 			{
-				if ( !_stricmp(m_APP[i]->GetName(), pPacketRecv->AppName))
+				if ( !m_APP[i])
+					continue;
+
+				DWORD dwIndexCount = m_APP[i]->GetNameCount();
+				for ( DWORD j = 0; j < dwIndexCount; j++)
 				{
-					if ( !pAppEx)
+					if ( !_stricmp(m_APP[i]->GetNameIndex(j), pPacketRecv->AppName))
 					{
-						pPacketRecv->ePacketLevel = EmPacketLevel::Middle;
-						pPacketRecv->uPacketOption &= Packet_Need_Encryption;
+						piAP = m_APP[i];
+						sAppName = piAP->GetNameIndex(j);
+						ASSERT(piAP && sAppName && sAppName[0]);
+						if ( !pAppChnEx)	// 如果没有主AppChanEx,说明这是创建一个主App通道,否则需要创建一个附属App通道
+						{
+							ASSERT(pPacketRecv->ePacketLevel == EmPacketLevel::Middle
+								 && NULL == (pPacketRecv->uPacketOption&(~Packet_Need_Encryption)));
+							pPacketRecv->ePacketLevel = EmPacketLevel::Middle;
+							pPacketRecv->uPacketOption &= Packet_Need_Encryption;
+						}
+						break;
 					}
-					pNewAppChannel = (CAppChannelEx*)allocateAppChannel(pUserEx, m_APP[i], pAppEx
-						, (EmPacketLevel)pPacketRecv->ePacketLevel, pPacketRecv->uPacketOption);
-					break;
 				}
 			}
 
+			CAppChannelEx* pNewAppChannel = nullptr;
+			if ( piAP && sAppName)
+			{
+				pNewAppChannel = (CAppChannelEx*)
+					allocateAppChannel(pUserEx, piAP, sAppName, pAppChnEx
+					, (EmPacketLevel)pPacketRecv->ePacketLevel, pPacketRecv->uPacketOption);
+			}
+
 			// 发送创建回复
-			ReadWritePacket* pPacketSend = AllocateBuffer((StTransferChannel*)pContext, EmPacketOperationType::OP_Send, 0);
+			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, EmPacketOperationType::OP_IocpSend, 0);
 			if ( pPacketSend)
 			{
+				HRESULT hr = E_FAIL;
 				pPacketSend->buff.size = Create_CTEPPacket_CreateAppRsp(
 					(CTEPPacket_CreateAppRsp*)pPacketSend->buff.buff, pUserEx->UserId
 					, pNewAppChannel ? pNewAppChannel->AppChannelId : (USHORT)-1
@@ -525,45 +593,78 @@ void CCtepCommunicationServer::OnReadCompleted(StTransferChannelEx *pContext, Re
 					, pHeader->GetAppId()
 					, pNewAppChannel ? TRUE : FALSE);
 
-				SendPacket(pContext, pPacketSend);
 				if ( pNewAppChannel)
 				{
-					LOCK((CMyCriticalSection*)pNewAppChannel);
-					pNewAppChannel->piAppProtocol->Connect(pUserEx, pNewAppChannel, pAppEx);
+					hr = SendPacket(pNewAppChannel->pTransChannel, pPacketSend, pNewAppChannel->Level);
+					pNewAppChannel->piAppProtocol->Connect(pUserEx, pNewAppChannel, pAppChnEx);
+					m_log.print(L" [UID:%d][TYPE:%S] App Created:[%S] AppId:%d{%s}"
+						, pUserEx->UserId, pContext->piTrans->GetName()
+						, pPacketRecv->AppName, pNewAppChannel->AppChannelId, pNewAppChannel->debugType());
 				}
-				
+				else
+				{
+					hr = SendPacket(pContext, pPacketSend, High);
+					m_log.FmtWarning(3, L" [UID:%d][TYPE:%S] Unsupport App:[%S]"
+						, pUserEx->UserId, pContext->piTrans->GetName()
+						, pPacketRecv->AppName);
+				}
+				ASSERT(SUCCEEDED(hr));
+
+				m_log.print(L"OnReadCompleted - CreateApp:[%S]. hResult:[%d] AppChannelId:[%d] - with StaticAppChannelId:[%d]"
+					, pPacketRecv->AppName, hr
+					, pNewAppChannel ? pNewAppChannel->AppChannelId : (USHORT)-1
+					, pHeader->GetAppId());
 			}
 			else
 			{
-				m_log.Error(3, L"ConnectEstablished - MallocPacket Failed. No Enough Memory.");
+				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
 			}
-
-
 
 			continue;
 		}
 
-		if ( pAppEx && pHeader->IsMessage())
+		if ( pAppChnEx && pHeader->IsMessage())
 		{
 			CTEPPacket_Message* pMsg = (CTEPPacket_Message*)pHeader;
 
 			DWORD dwSize = 0;
-			char* buff = pAppEx->SplitPacket(pMsg, dwSize);
+			char* buff = pAppChnEx->SplitPacket(pMsg, dwSize);
 			if ( buff && buff != (char*)-1)
 			{
-				LOCK((CMyCriticalSection*)pAppEx);
-				if ( pAppEx->piAppProtocol)
+				if ( pAppChnEx->piAppProtocol)
 				{
-					pAppEx->piAppProtocol->ReadPacket(pUserEx
-						, pAppEx, buff, dwSize);
-					pAppEx->SplitPacket(0, dwSize);
+					pAppChnEx->Lock();
+					pAppChnEx->piAppProtocol->ReadPacket(pUserEx, pAppChnEx, buff, dwSize);
+					pAppChnEx->Unlock();
+
+					pAppChnEx->SplitPacket(0, dwSize);
 				}
 			}
 			else if ( buff == (char*)-1)
 			{
-				closeAppChannel(pAppEx);
+				closeAppChannel(pAppChnEx);
 			}
 
+			continue;
+		}
+
+		if ( !pAppChnEx && pHeader->IsMessage())// 找不到指定的通道,可能已经被关闭了
+		{
+			// 发送关闭回复
+			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, EmPacketOperationType::OP_IocpSend, 0);
+			if ( pPacketSend)
+			{
+				pPacketSend->buff.size = Create_CTEPPacket_Header(
+					(CTEPPacket_Header*)pPacketSend->buff.buff
+					, sizeof(CTEPPacket_CloseAppRsp), CTEP_PACKET_CONTENT_CLOSE_APP_RSP
+					, pUserEx->UserId, pHeader->GetAppId());
+
+				SendPacket(pContext, pPacketSend, High);
+			}
+			else
+			{
+				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
+			}
 			continue;
 		}
 
@@ -583,9 +684,10 @@ BOOL CCtepCommunicationServer::OnStart()
 	{
 		if ( m_APP[i])
 		{
-			HRESULT hr = m_APP[i]->Initialize(dynamic_cast<ICTEPAppProtocolCallBack*>(this));
+			HRESULT hr = m_APP[i]->Initialize(dynamic_cast<ICTEPAppProtocolCallBack*>(this), CTEP_TYPE_APP_SERVER);
 			if ( SUCCEEDED(hr))
 			{
+				m_log.print(L"App[%S] initialize success.", m_APP[i]->GetName());
 				bRet = TRUE;
 			}
 			else
@@ -609,7 +711,7 @@ void CCtepCommunicationServer::OnShutdown()
 {
 	// 关闭所有应用连接
 	CAppChannelEx* pApp;
-	while(NULL != (pApp = m_smapAppChn.Pop()))
+	while(NULL != (pApp = m_smapAppChn.FindFirst()))
 	{
 		closeAppChannel(pApp);
 	}

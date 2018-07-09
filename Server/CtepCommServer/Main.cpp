@@ -7,6 +7,8 @@
 #include "CommonInclude/MainImpl.h"
 
 
+BOOL WINAPI HandlerRoutine(__in  DWORD dwCtrlType);
+
 class CMyService : public CCtepCommunicationServer
 	, public CRunOneServiceImpl<CMyService>
 	, public CServiceImpl<CMyService>
@@ -14,7 +16,10 @@ class CMyService : public CCtepCommunicationServer
 public:
 	CMyService():CServiceImpl(L"CTEP", L"CTEP Foundation Architecture")
 	{
-		;
+#ifdef _DEBUG
+		BOOL bRet = SetConsoleCtrlHandler(HandlerRoutine, TRUE);
+		ASSERT(bRet);
+#endif // _DEBUG
 	}
 	virtual HRESULT STDMETHODCALLTYPE RunStop()
 	{
@@ -37,6 +42,16 @@ public:
 #endif // _DEBUG
 };
 CMyObjectSolid<CSimpleMain<CMyService>> gOneApp;
+
+BOOL WINAPI HandlerRoutine(__in  DWORD dwCtrlType)
+{
+	if ( dwCtrlType == CTRL_C_EVENT)
+	{
+		gOneApp.RunStop();
+		return TRUE;
+	}
+	return FALSE;
+}
 
 int _tmain(int argc, _TCHAR* argv[])
 {

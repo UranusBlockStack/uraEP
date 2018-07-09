@@ -1,136 +1,163 @@
 #pragma once
 
+#include "Log4Cpp_Lib/Log4CppLib.h"
+#include "CommonInclude/DynamicBuffer.h"
+
 #include "CTEP_Communicate_TransferLayer_Interface.h"
 #include "CTEP_Communicate_App_Interface.h"
 
 // 这是per-Handle数据。它包含了一个套节字的信息
-struct StTransferChannelEx
+class __declspec(novtable) CTransferChannelEx : public CTransferChannel
 {
+	Log4CppLib m_log;
+public:
+	CTransferChannelEx() : m_log("TransChnEx")
+	{
+		rbufPacket.Init(cPacketBuf, sizeof(cPacketBuf)-4, sizeof(CTEPPacket_Header)
+			, CTEP_DEFAULT_BUFFER_SIZE, CDynamicRingBuffer::defaultGetBagSize);
+		bNeedNotificationClosing = FALSE;
+		InitEx();
+	}
 	void InitEx()
 	{
 		ASSERT( !bNeedNotificationClosing);
-		head.Init();
-		nOutstandingSend = 0;
-		bClosing = TRUE;
-		bNeedNotificationClosing = FALSE;
-		bufPacket.Init(cPacketBuf);
+		this->Init();
+		rbufPacket.Clear();
 
+		nOutstandingSend = 0;
+		bNeedNotificationClosing = FALSE;
 		pNext = NULL;
+
+		SequenceIdLocal = 0;
+		SequenceIdRemote = 0;
 	}
 	inline HRESULT DisconnectServer(ReadWritePacket* pBuffer = 0)
 	{
-		return head.piTrans->Disconnect(&head, pBuffer);
+		ASSERT(piTrans);
+		if ( !piTrans)
+			return E_FAIL;
+
+		return piTrans->Disconnect(this, pBuffer);
 	}
 	inline HRESULT DisconnectClient()
 	{
-		return head.piTransClt->Disconnect(&head);
+		ASSERT(piTransClt);
+		if ( !piTransClt)
+			return E_FAIL;
+
+		return piTransClt->Disconnect(this);
 	}
 	inline HRESULT SendPacketClient(ReadWritePacket* pBuffer)
 	{
-		return head.piTransClt->Send(&head, pBuffer);
+		ASSERT( pBuffer->buff.size <= CTEP_DEFAULT_BUFFER_SIZE);
+		::EnterCriticalSection(&lckSend);
+		SequenceIdLocal++;
+		((CTEPPacket_Header*)pBuffer->buff.buff)->SequenceId = SequenceIdLocal;
+		HRESULT hr = piTransClt->Send(this, pBuffer);
+		::LeaveCriticalSection(&lckSend);
+		return hr;
 	}
 	inline HRESULT SendPacketServer(ReadWritePacket* pBuffer)
 	{
-		return head.piTrans->Send(&head, pBuffer);
+		::EnterCriticalSection(&lckSend);
+		ASSERT( pBuffer->buff.size <= CTEP_DEFAULT_BUFFER_SIZE);
+		SequenceIdLocal++;
+		((CTEPPacket_Header*)pBuffer->buff.buff)->SequenceId = SequenceIdLocal;
+		HRESULT hr = piTrans->PostSend(this, pBuffer);
+		::LeaveCriticalSection(&lckSend);
+		return hr;
+	}
+
+	int PreSplitPacket(ReadWritePacket* pPacket)
+	{
+		int dwPacketSize = 0;
+
+		// 获取pPacket中剩余字节数
+#ifdef _DEBUG
+		if ( pPacket->buff.size == 0)
+		{
+			DWORD *pdwMagic = (DWORD*)rbufPacket.m_pDataEnd;
+			ASSERT(*pdwMagic == 0x12345678);
+		}
+		else
+		{
+			ASSERT(pPacket->buff.buff == rbufPacket.m_pDataEnd);
+		}
+#endif // _DEBUG
+		
+		dwPacketSize = rbufPacket.PushData(pPacket->buff.size);
+		ASSERT(dwPacketSize >= 0);
+
+#ifdef _DEBUG
+		CTEPPacket_Header* pHeader = (CTEPPacket_Header*)rbufPacket.m_pData;
+		ASSERT(pHeader->PacketLength == dwPacketSize || dwPacketSize == 0);
+		DWORD *pdwMagic = (DWORD*)rbufPacket.m_pDataEnd;
+		*pdwMagic = 0x12345678;
+#endif // _DEBUG
+
+		pPacket->buff.size = 0;
+		return dwPacketSize;
 	}
 	
 	CTEPPacket_Header* SplitPacket(ReadWritePacket* pPacket)
 	{
-		long leftsize;
-		CTEPPacket_Header* pHeader;
+		CTEPPacket_Header* pHeader = nullptr;
+		int dwPacketSize = 0;
 
 		// 获取pPacket中剩余字节数
-		if ( !pPacket->pointer)
+#ifdef _DEBUG
+		if ( pPacket->buff.size == 0)
 		{
-			pPacket->pointer = pPacket->buff.buff;
-			leftsize = pPacket->buff.size;
+			DWORD *pdwMagic = (DWORD*)rbufPacket.m_pDataEnd;
+			ASSERT(*pdwMagic == 0x12345678);
 		}
 		else
 		{
-			leftsize = pPacket->buff.size - (pPacket->pointer - pPacket->buff.buff);
-			ASSERT(leftsize >= 0);
+			ASSERT(pPacket->buff.buff == rbufPacket.m_pDataEnd);
 		}
+#endif // _DEBUG
+		dwPacketSize = rbufPacket.PushDataAndPop(pPacket->buff.size, (void**)&pHeader);
+		pPacket->buff.size = 0;
 
-		if ( leftsize <= 0)
+		if ( dwPacketSize < 0)
+			return (CTEPPacket_Header*)-1;
+		else if ( dwPacketSize == 0)
 			return nullptr;
 
-		// 清除上次拼装好的完整包
-		if ( bufPacket.size > 0 && bufPacket.size == bufPacket.maxlength)
-			bufPacket.Init(cPacketBuf);
+#ifdef _DEBUG
+		ASSERT(pHeader->PacketLength == dwPacketSize);
+		DWORD *pdwMagic = (DWORD*)rbufPacket.m_pDataEnd;
+		*pdwMagic = 0x12345678;
+#endif // _DEBUG
 
-		// 检查是否有上次剩下的字节
-		if ( bufPacket.size == 0)
+		if ( SequenceIdRemote == 0)
+			SequenceIdRemote = pHeader->SequenceId;
+		else
+			SequenceIdRemote++;
+		if ( SequenceIdRemote != pHeader->SequenceId)
 		{
-			pHeader = (CTEPPacket_Header*)pPacket->pointer;
-
-			// 检查pPacket中是否是一个完整包
-			if (	leftsize < sizeof(CTEPPacket_Header)
-				|| pHeader->PacketLength > leftsize)
-			{
-				memcpy(bufPacket.buff, pPacket->pointer, leftsize);
-				pPacket->pointer += leftsize;
-				bufPacket.size = leftsize;
-				return nullptr;
-			}
-			else
-			{
-				pPacket->pointer += pHeader->PacketLength;
-				return pHeader;
-			}
+			m_log.FmtError(0x7, L"SequenceIdRemote:%d != pHeader->SequenceId:%d"
+				, SequenceIdRemote, pHeader->SequenceId);
+			ASSERT(0);
+			SequenceIdRemote = pHeader->SequenceId;
 		}
 
-		// 检查上次剩下的字节是否具有完整的包头
-		if ( bufPacket.size < sizeof(CTEPPacket_Header))
-		{
-			DWORD dwCopy = min((DWORD)leftsize, sizeof(CTEPPacket_Header)-bufPacket.size);
-			memcpy(bufPacket.buff+bufPacket.size, pPacket->pointer, dwCopy);
-			pPacket->pointer += dwCopy;
-			bufPacket.size += dwCopy;
-
-			if ( bufPacket.size < sizeof(CTEPPacket_Header))
-				return nullptr;
-		}
-
-		pHeader = (CTEPPacket_Header*)bufPacket.buff;
-		ASSERT(bufPacket.maxlength == 0 || bufPacket.maxlength == pHeader->PacketLength);
-		bufPacket.maxlength = pHeader->PacketLength;
-		ASSERT(bufPacket.size <= bufPacket.maxlength
-			&& bufPacket.maxlength >= sizeof(CTEPPacket_Header));
-
-		if (	bufPacket.size > bufPacket.maxlength
-			|| bufPacket.maxlength < sizeof(CTEPPacket_Header))
-		{
-			bufPacket.Init(cPacketBuf);
-			return (CTEPPacket_Header*)-1;
-		}
-
-		if ( bufPacket.size == bufPacket.maxlength)
-			return pHeader;
-
-		DWORD dwCopy = min((DWORD)leftsize, bufPacket.maxlength - bufPacket.size);
-		memcpy(bufPacket.buff+bufPacket.size, pPacket->pointer, dwCopy);
-		pPacket->pointer += dwCopy;
-		bufPacket.size += dwCopy;
-
-		if ( bufPacket.size == bufPacket.maxlength)
-			return pHeader;
-
-		return nullptr;
+		return pHeader;
 	}
 
 public:
-	StTransferChannel head;// 
+	volatile ULONG SequenceIdLocal;
+	volatile ULONG SequenceIdRemote;
 
 	volatile long nOutstandingSend;// 此套节字上抛出的重叠操作的数量
 
-	volatile BOOL bClosing;					// 套节字是否关闭
 	volatile UINT bNeedNotificationClosing;	// 是否需要通知App用户退出, TRUE:需要通知, FALSE:不需要通知
 
 	// 保存未完成的一个底层分包
-	CBuffer			bufPacket;
-	char			cPacketBuf[CTEP_DEFAULT_BUFFER_SIZE];
+	char				cPacketBuf[CTEP_DEFAULT_BUFFER_SIZE * 32];
+	CDynamicRingBuffer	rbufPacket;
 
-	StTransferChannelEx *pNext;
+	CTransferChannelEx *pNext;
 };
 
 
@@ -138,8 +165,8 @@ class CUserDataEx : public CUserData
 	, public CMyCriticalSection
 {
 public:
-	explicit CUserDataEx(StTransferChannelEx* pMain, const GUID& guid = GUID_NULL):pTransChnMain(pMain)
-		, pTransChnTcp(nullptr), pTransChnUdp(nullptr), bClosing(FALSE), guidUser(guid)
+	explicit CUserDataEx(CTransferChannelEx* pMain, const GUID& guid = GUID_NULL):pTransChnMain(pMain)
+		, pTransChnTcp(nullptr), pTransChnUdp(nullptr), bClosing(TRUE), guidUser(guid)
 	{
 		UserId = (USHORT)-1;
 		dwSessionId = (DWORD)-1;
@@ -149,39 +176,82 @@ public:
 public:
 	BOOL				 bClosing;
 	GUID				 guidUser;
-	StTransferChannelEx* pTransChnMain;
-	StTransferChannelEx* pTransChnTcp;
-	StTransferChannelEx* pTransChnUdp;
+	CTransferChannelEx* pTransChnMain;
+	CTransferChannelEx* pTransChnTcp;
+	CTransferChannelEx* pTransChnUdp;
 };
 
 class CAppChannelEx : public CAppChannel, public CMyCriticalSection
 {
 public:
-	CAppChannelEx(CUserDataEx *pUserEx, ICTEPAppProtocol* piAppProt, 
-		CAppChannelEx *pStaAppChn /*= nullptr*/, EmPacketLevel level /*= Middle*/, USHORT option /*= 0*/)
-		: pStaticAppChannel(pStaAppChn), pNextDynamicAppChannel(nullptr)
+	CAppChannelEx()
 	{
-		bufData.Init();
-		pUser = pUserEx;
-		pAppParam = 0;
+		sAppName = nullptr;
+		pAppParam = nullptr;
+		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
+		bufData.buff = nullptr;
+		pNext = nullptr;
+	}
+	~CAppChannelEx()
+	{
+		Recycling();
+	}
+
+	void Recycling()
+	{
+		LOCK(this);
+		bClosing = TRUE;
+
+		RemoveLink();
+
+		sAppName = nullptr;
+		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
+		pUser = nullptr;
+		ASSERT(pAppParam == nullptr);
 		AppChannelId = (USHORT)-1;
-		piAppProtocol = piAppProt;
-		Level = level;
-		uPacketOption = option;
+		piAppProtocol = nullptr;
+		Level = Low;
+		uPacketOption = 0;
+		pTransChannel = nullptr;
+		nCount = 0;
+	}
+
+	void Initialize(CUserDataEx *inUserEx, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName,
+		CAppChannelEx *inStaAppChn /*= nullptr*/, EmPacketLevel inlevel /*= Middle*/, USHORT inOption /*= 0*/)
+	{
+		pNext = nullptr;
+		sAppName = inAppName;
+		pStaticAppChannel = inStaAppChn;
+		pNextDynamicAppChannel = nullptr;
+
+		bClosing = FALSE;
+
+		if ( bufData.buff)
+		{
+			free(bufData.buff);
+		}
+		bufData.Init();
+		pUser = inUserEx;
+		ASSERT(pAppParam == nullptr);
+		pAppParam = nullptr;
+		AppChannelId = (USHORT)-1;
+		piAppProtocol = inpiAppProt;
+		Level = inlevel;
+		uPacketOption = inOption;
 		ASSERT(pUser);
 		ASSERT( !pStaticAppChannel || 0 == (uPacketOption&Packet_Can_Lost));
 
-		if ( pStaticAppChannel && (uPacketOption&Packet_Can_Lost) && pUserEx->pTransChnUdp)
+		if ( pStaticAppChannel && (uPacketOption&Packet_Can_Lost) && inUserEx->pTransChnUdp)
 		{
-			this->pTransChannel = (StTransferChannel*)pUserEx->pTransChnUdp;
+			this->pTransChannel = inUserEx->pTransChnUdp;
 		}
-		else if ( pUserEx->pTransChnTcp)
+		else if ( inUserEx->pTransChnTcp)
 		{
-			this->pTransChannel = (StTransferChannel*)pUserEx->pTransChnTcp;
+			this->pTransChannel = inUserEx->pTransChnTcp;
 		}
-		else if ( pUserEx->pTransChnMain)
+		else if ( inUserEx->pTransChnMain)
 		{
-			this->pTransChannel = (StTransferChannel*)pUserEx->pTransChnMain;
+			this->pTransChannel = inUserEx->pTransChnMain;
 		}
 		else
 		{
@@ -192,21 +262,14 @@ public:
 		if ( pStaticAppChannel)
 		{
 			Type = DynamicChannel;
-			PushLink(pStaticAppChannel);
+			nCount = PushLink(pStaticAppChannel);
 		}
 		else
 		{
 			Type = StaticChannel;
 			pStaticAppChannel = this;
+			nCount = 1;
 		}
-	}
-	~CAppChannelEx()
-	{
-		if ( bufData.buff)
-		{
-			free(bufData.buff);
-		}
-		RemoveLink();
 	}
 
 	inline char* SplitPacket( CTEPPacket_Message* pMsg, __out DWORD& dwSize)
@@ -254,7 +317,7 @@ public:
 			bufData.maxlength = dwEntirSize;
 		}
 
-		memcpy(bufData.buff + bufData.size, pMsg->GetBuffer(), pMsg->GetMessageLength());
+		memmove_s(bufData.buff + bufData.size, bufData.maxlength - bufData.size, pMsg->GetBuffer(), pMsg->GetMessageLength());
 		bufData.size += pMsg->GetMessageLength();
 
 		if ( pHeader->LastPacket())
@@ -272,21 +335,26 @@ public:
 		return nullptr;
 	}
 
-	inline void PushLink(CAppChannelEx* pStaChn)
+	inline ULONG PushLink(CAppChannelEx* pStaChn)
 	{
-		ASSERT(pStaChn && pStaChn == pStaticAppChannel && Type == DynamicChannel);
-		pStaChn->Lock();
+		ULONG linkId;
+		ASSERT(pStaChn && pStaChn == pStaticAppChannel && pStaChn->Type == StaticChannel && Type == DynamicChannel);
+
+		LOCK((CMyCriticalSection*)pStaChn);
+		linkId = ++pStaChn->nCount;
 		pNextDynamicAppChannel = pStaChn->pNextDynamicAppChannel;
 		pStaChn->pNextDynamicAppChannel = this;
-		pStaChn->Unlock();
+
+		return linkId;
 	}
+
 	inline void RemoveLink()// DynamicChannel 从master上移除
 	{
 		CAppChannelEx *pTemp = pStaticAppChannel;
 		if ( pTemp && this != pTemp)
 		{
 			ASSERT(Type == DynamicChannel);
-			pTemp->Lock();
+			LOCK((CMyCriticalSection*)pTemp);
 			if ( pStaticAppChannel)
 			{
 				pStaticAppChannel = nullptr;
@@ -302,16 +370,11 @@ public:
 
 				if ( p2)
 				{
+					pTemp->nCount--;
 					p1->pNextDynamicAppChannel = p2->pNextDynamicAppChannel;
 					p2->pNextDynamicAppChannel = nullptr;
 				}
 			}
-			pTemp->Lock();
-		}
-		else
-		{
-			ASSERT(Type == StaticChannel);
-			ASSERT( pNextDynamicAppChannel == nullptr);	// 静态通道关闭时,必须保证绑定在它上面的所有动态通道都已经退出完毕
 		}
 	}
 	inline CAppChannelEx* PopLink()// 取出一个动态通道,有可能取出自己,也有可能不是自己
@@ -319,27 +382,29 @@ public:
 		CAppChannelEx* pResult = nullptr;
 		if ( pStaticAppChannel && pStaticAppChannel->pNextDynamicAppChannel)
 		{
-			pStaticAppChannel->Lock();
+			LOCK((CMyCriticalSection*)pStaticAppChannel);
 
 			if ( pStaticAppChannel && pStaticAppChannel->pNextDynamicAppChannel)
 			{
+				pStaticAppChannel->nCount--;
 				pResult = pStaticAppChannel->pNextDynamicAppChannel;
 				pStaticAppChannel->pNextDynamicAppChannel = pResult->pNextDynamicAppChannel;
 			}
-
-			pStaticAppChannel->Unlock();
-
 			pResult->pNextDynamicAppChannel = nullptr;
 		}
 		return pResult;
 	}
 
 public:
+	CTransferChannelEx	*pTransChannel;
+
 	CAppChannelEx	*pStaticAppChannel;
 	CAppChannelEx	*pNextDynamicAppChannel;
 
 	//保存未完成的一个上层分包
 	CBuffer			bufData;
+
+	CAppChannelEx *pNext;
 };
 
 
