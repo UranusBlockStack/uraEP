@@ -130,7 +130,7 @@ public:
 		*pdwMagic = 0x12345678;
 #endif // _DEBUG
 
-		if ( SequenceIdRemote == 0)
+		if ( SequenceIdRemote == 0 || pHeader->SequenceId == 0 || pHeader->SequenceId == 1)
 			SequenceIdRemote = pHeader->SequenceId;
 		else
 			SequenceIdRemote++;

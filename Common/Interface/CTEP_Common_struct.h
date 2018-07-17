@@ -97,7 +97,6 @@ enum EmPacketOperationType
 	OP_Listen,			// 监听包,用于监听新的用户连接的包
 	OP_IocpSend,		// 完成端口上的发送数据包
 	OP_IocpRecv,		// 完成端口上的接收数据包
-	OP_PacketRecv,		// 不支持完成端口的 同步接收数据包
 };
 
 // 内存模组,描述了一块内存地址以及内部的有效数据数量(单位:bytes)

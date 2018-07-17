@@ -79,7 +79,7 @@ CIOCPServer::CIOCPServer()
 	}
 
 #ifdef _DEBUG
-	//m_dwWorkThreadCount = 1;
+	m_dwWorkThreadCount = 1;
 #endif // _DEBUG
 
 	m_hListenThread = NULL;
@@ -183,7 +183,7 @@ DWORD DebugGetBagSize(char* pbuf, DWORD dwSize, void* pParam)
 		CTEPPacket_Header* pPacket = (CTEPPacket_Header*)pbuf;
 		ASSERT(pPacket->magic == 'E');
 		ASSERT(pPacket->PacketLength <= CTEP_DEFAULT_BUFFER_SIZE);
-		ASSERT((pPacket->Type&CTEP_PACKET_CONTENT_MASK) <= 0x70);
+		ASSERT((pPacket->Type&CTEP_PACKET_CONTENT_MASK) <= 0xC0);
 		ASSERT((pPacket->Type&CTEP_PACKET_SEGMENT_MASK) <= 0x03);
 	}
 	if ( dwSize < 2)
@@ -329,24 +329,24 @@ void CIOCPServer::CloseAConnection(CTransferChannelEx *pContext)
 void CIOCPServer::CloseAllConnections()
 {
 	// 遍历整个连接列表，关闭所有的客户套节字
-	CTransferChannelEx *pContext = m_lstConnection.GetHead();
-	while(pContext != NULL)
-	{	
-// 		::EnterCriticalSection(&pContext->lckSend);
-// 		ASSERT(!pContext->bClosing);
-// 		if ( !pContext->bClosing)
-// 		{
-// 			pContext->bClosing = TRUE;
-// 
-// 			// 然后关闭客户套节字
-// 			pContext->piTrans->Disconnect(pContext);
-// 
-// 			ASSERT(pContext->pNext == 0);
-// 			m_queFreeContext.Push(pContext);
-// 		}
-// 		::LeaveCriticalSection(&pContext->lckSend);
-		CloseAConnection(pContext);
+	CTransferChannelEx *pContext = nullptr;
+	m_lcklstConnection.Lock();
+	if ( m_lstConnection.GetCount()>0)
+	{
 		pContext = m_lstConnection.GetHead();
+	}
+	m_lcklstConnection.Unlock();
+
+	while( pContext)
+	{	
+		CloseAConnection(pContext);
+
+		m_lcklstConnection.Lock();
+		if ( m_lstConnection.GetCount()>0)
+		{
+			pContext = m_lstConnection.GetHead();
+		}
+		m_lcklstConnection.Unlock();
 	}
 }
 
@@ -674,9 +674,7 @@ DWORD CIOCPServer::_threadSyncWorker()
 		pContext = m_queSyncRead.PopAndWait(dwWaitTime);
 		if ( !pContext)
 		{
-			dwWaitTime *= 2;
-			if (dwWaitTime > 1000)
-				dwWaitTime = 1000;
+			if (dwWaitTime < 1000)dwWaitTime *= 2;
 			continue;
 		}
 
@@ -688,12 +686,13 @@ DWORD CIOCPServer::_threadSyncWorker()
 		{
 			ReadWritePacket* pPacket = AllocateBuffer(pContext, OP_IocpRecv);
 			ASSERT(pPacket && pContext->type == SyncMain);
+
 			HRESULT hr = pContext->piTrans->PostRecv(pContext, pPacket);
 			if ( S_OK == hr
 				 && pPacket->ol.InternalHigh == 0)
 			{
 				ReleaseBuffer(pPacket);
-				m_queSyncRead.PushAndSigned(pContext);
+				m_queSyncRead.PushNoSigned(pContext);
 
 				if (  ++i >= dwCount)
 					break;
@@ -736,29 +735,13 @@ DWORD CIOCPServer::_threadSyncWorker()
 			else
 			{
 				ASSERT(pPacket->ol.InternalHigh == 0);
+				ASSERT(pPacket->ol.Internal != 0);
 			}
 #endif // _DEBUG
 
-// 			pPacket->buff.size = pPacket->ol.InternalHigh;
-// 			pPacket->ol.InternalHigh = 0;
-// 			int bResult = pContext->PreSplitPacket(pPacket);
-// 			if ( bResult == 0)
-// 			{
-// 				ReleaseBuffer(pPacket);
-// 				m_queSyncRead.PushAndSigned(pContext);
-// 
-// 				if (  ++i >= dwCount)
-// 					break;
-// 				pContext = m_queSyncRead.PopAndWait(0);
-// 				continue;
-// 			}
-
 			ASSERT(pContext);
 			bNeedSleep = FALSE;
-// 			if ( bResult > 0)
-// 			{
-// 				pPacket->opType = OP_PacketRecv;
-// 			}
+
 			BOOL bRet = PostQueuedCompletionStatus(m_hCompletion, pPacket->ol.InternalHigh
 				, (ULONG_PTR)pContext, &pPacket->ol);
 			ASSERT(bRet);
@@ -778,18 +761,15 @@ DWORD CIOCPServer::_threadSyncWorker()
 
 		if ( bNeedSleep)
 		{
-			dwWaitTime *= 2;
-			if (dwWaitTime > 1000)
-				dwWaitTime = 1000;
 			DWORD dwWait = WaitForSingleObjectEx(m_queSyncRead.m_hEvent, dwWaitTime, true);
 			if ( dwWait == WAIT_TIMEOUT)
 			{
-				dwWaitTime *= 2;
+				if (dwWaitTime < 1000)dwWaitTime *= 2;
 			}
 		}
 		else
 		{
-			dwWaitTime = 1;
+			dwWaitTime = 10;
 		}
 	}
 
@@ -1007,6 +987,7 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 						// 向新连接投递1个Read请求，这些空间在套节字关闭或出错时释放
 						if ( pClient->type == SyncMain)
 						{
+							ASSERT(pClient->hFile != INVALID_HANDLE_VALUE);
 							m_queSyncRead.PushAndSigned(pClient);
 							bSuccess = TRUE;
 						}
@@ -1056,15 +1037,9 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 		::InterlockedIncrement(&m_nRepostCount);
 		::SetEvent(m_hRepostEvent);
 	}
-	else if ( pBuffer->opType == EmPacketOperationType::OP_PacketRecv)
+	else if ( pBuffer->opType == EmPacketOperationType::OP_IocpRecv)
 	{
-		ASSERT( pContext->type == SyncMain);
-		OnReadCompleted(pContext, pBuffer);// 通知用户
-		ReleaseBuffer(pBuffer);
-	}
-	else if(pBuffer->opType == EmPacketOperationType::OP_IocpRecv)
-	{
-		if(dwTrans == 0)	// 对方关闭套节字
+		if( dwTrans == 0)	// 对方关闭套节字
 		{
 			// 先通知用户
 			if ( InterlockedExchange((volatile UINT*)&pContext->bNeedNotificationClosing, FALSE))
@@ -1074,13 +1049,13 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 
 			// 再关闭连接
 			CloseAConnection(pContext);
-			ReleaseBuffer(pBuffer);	
 		}
 		else
 		{
 			OnReadCompleted(pContext, pBuffer);// 通知用户
-			ReleaseBuffer(pBuffer);
 		}
+
+		ReleaseBuffer(pBuffer);	
 	}
 	else if(pBuffer->opType == EmPacketOperationType::OP_IocpSend)
 	{
@@ -1104,6 +1079,10 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 			// 释放SendText函数申请的缓冲区
 			ReleaseBuffer(pBuffer);
 		}
+	}
+	else
+	{
+		ASSERT(0);
 	}
 
 	if ( pContext && !pContext->bClosing && ePacketType == EmPacketOperationType::OP_IocpRecv)

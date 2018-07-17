@@ -7,7 +7,7 @@ class CCtepCommClient : public ICTEPTransferProtocolClientCallBack, public CLoad
 {
 public:
 	CCtepCommClient():m_UserEx(0, GUID_NULL), m_bWorking(FALSE), m_log("CommClt")
-		, m_evtRdpStartWait(NULL)
+		, m_evtRdpStartWait(NULL), m_hTrdStartWait(NULL)
 	{
 		ReadWritePacket* pBuffer = new ReadWritePacket();
 		pBuffer->PacketInit();
@@ -39,13 +39,29 @@ public:
 	}
 	~CCtepCommClient()
 	{
-
+		;
 	}
 
 	void Shutdown()
 	{
 		if ( m_bWorking)
 		{
+			HANDLE hTrd = m_hTrdStartWait;
+			HANDLE hEvt = m_evtRdpStartWait;
+			if ( hTrd || hEvt)
+			{
+				m_evtRdpStartWait = NULL;
+				m_hTrdStartWait = NULL;
+
+				SetEvent(hEvt);
+				DWORD dwWait = WaitForSingleObject(hTrd, INFINITE);
+				ASSERT(dwWait == WAIT_OBJECT_0);
+				if ( dwWait != WAIT_OBJECT_0)
+					TerminateThread(hTrd, 0);
+				CloseHandle(hEvt);
+				CloseHandle(hTrd);
+			}
+
 			ASSERT(m_bWorking && m_UserEx.pTransChnMain);
 			if ( m_UserEx.pTransChnMain)
 			{
@@ -54,47 +70,46 @@ public:
 		}
 	}
 
+	volatile HANDLE m_hTrdStartWait;
 	volatile HANDLE m_evtRdpStartWait;
 	static DWORD WINAPI _trdRdpStartWait(LPVOID param){return ((CCtepCommClient*)param)->trdRdpStartWait();}
 	DWORD trdRdpStartWait()
 	{
 		HANDLE hEvent = m_evtRdpStartWait;
-
 		CTransferChannelEx *pTransChnEx = m_UserEx.pTransChnMain;
-		ASSERT(hEvent);
-
 		HRESULT hr = S_OK;
 		DWORD dwCount = 0;
 		DWORD dwWaitTime = 1000;
-		do
+
+		if ( !m_UserEx.bClosing && hEvent)
 		{
-			ReadWritePacket* pPacketHello = AllocatePacket(pTransChnEx, OP_IocpSend, 0);
-			pPacketHello->buff.size = Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacketHello->buff.buff, L"Hello_Rdp", FALSE);
-			hr = pTransChnEx->SendPacketClient(pPacketHello);
-			if ( hr != ERROR_IO_PENDING)
-				ReleasePacket(pPacketHello);
+			while (SUCCEEDED(hr) && WAIT_TIMEOUT == WaitForSingleObject(hEvent, dwWaitTime) && dwCount++ < 180)
+			{
+				if ( m_UserEx.bClosing)
+				{
+					m_log.Warning(3, L"trdRdpStartWait - m_UserEx.bClosing !");
+					return -1;
+				}
+				ASSERT(!m_UserEx.bClosing);
+				ReadWritePacket* pPacketHello = AllocatePacket(pTransChnEx, OP_IocpSend, 0);
+				pPacketHello->buff.size = Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacketHello->buff.buff, L"Hello_Rdp", FALSE);
+				hr = pTransChnEx->SendPacketClient(pPacketHello);
+				if ( hr != ERROR_IO_PENDING)
+					ReleasePacket(pPacketHello);
 
-			if ( dwWaitTime < 5000)
-				dwWaitTime += 1000;
+				if ( dwWaitTime < 30000)
+					dwWaitTime *= 2;
+			}
+
+			if ( SUCCEEDED(hr))
+			{
+				m_log.print(L"trdRdpStartWait - Rdp Connected!");
+			}
+			else
+			{
+				m_log.FmtError(3, L"trdRdpStartWait - Rdp Connect Failed. hr:0x%08x", hr);
+			}
 		}
-		while (SUCCEEDED(hr) && WAIT_TIMEOUT == WaitForSingleObject(hEvent, dwWaitTime) && dwCount++ < 180);
-
-		if ( SUCCEEDED(hr))
-		{
-			m_log.print(L"trdRdpStartWait - Rdp Connected!");
-		}
-		else
-		{
-			m_log.FmtError(3, L"trdRdpStartWait - Rdp Connect Failed. hr:0x%08x", hr);
-		}
-		ReadWritePacket* pPacketInit = AllocatePacket(pTransChnEx, OP_IocpSend, 0);
-		pPacketInit->buff.size = Create_CTEPPacket_Init((CTEPPacket_Init*)pPacketInit->buff.buff);
-
-		hr = pTransChnEx->SendPacketClient(pPacketInit);
-		if ( hr != ERROR_IO_PENDING)
-			ReleasePacket(pPacketInit);
-
-		CloseHandle(hEvent);
 
 		return 0;
 	}
@@ -127,18 +142,33 @@ public:
 
 		hr = piTransProtClt->Connect(pTransMain);
 		ASSERT(SUCCEEDED(hr));
+
 		if ( !_stricmp(piTransProtClt->GetName(), "RDP"))
 		{
-			ASSERT(m_evtRdpStartWait == NULL);
-			if ( m_evtRdpStartWait)
+			// 1,先发送一个Hello包
+			ReadWritePacket* pPacketHello = AllocatePacket(pTransMain, OP_IocpSend, 0);
+			pPacketHello->buff.size = Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacketHello->buff.buff, L"Hello_Rdp", FALSE);
+			hr = pTransMain->SendPacketClient(pPacketHello);
+			if ( hr != ERROR_IO_PENDING)
+
+			// 2,启动等待线程
+			ASSERT(!m_hTrdStartWait && !m_evtRdpStartWait);
+			if ( m_hTrdStartWait || m_evtRdpStartWait)
 			{
 				SetEvent(m_evtRdpStartWait);
-				m_evtRdpStartWait = 0;
+				DWORD dwWait = WaitForSingleObject(m_hTrdStartWait, INFINITE);
+				ASSERT(dwWait == WAIT_OBJECT_0);
+				if ( dwWait != WAIT_OBJECT_0)
+					TerminateThread(m_hTrdStartWait, 0);
+				CloseHandle(m_evtRdpStartWait);
+				CloseHandle(m_hTrdStartWait);
+				m_evtRdpStartWait = NULL;
+				m_hTrdStartWait = NULL;
 			}
+
 			m_evtRdpStartWait = CreateEvent(0, TRUE, FALSE, 0);
-			HANDLE hThread = CreateThread(0, 0, _trdRdpStartWait, this, 0, 0);
-			WaitForSingleObject(hThread, 1);
-			CloseHandle(hThread);
+			m_hTrdStartWait = CreateThread(0, 0, _trdRdpStartWait, this, CREATE_SUSPENDED, 0);
+			ASSERT(m_evtRdpStartWait && m_hTrdStartWait);
 		}
 		else
 		{
@@ -170,11 +200,27 @@ public:
 			doStart(pTransMain);
 			hr = E_FAIL;
 		}
+		else
+		{
+			if ( m_hTrdStartWait)
+			{
+				ResumeThread(m_hTrdStartWait);
+			}
+		}
 
 End:
 		if ( FAILED(hr))
 		{
 			m_UserEx.bClosing = TRUE;
+			if ( m_hTrdStartWait)
+			{
+				CloseHandle(m_evtRdpStartWait);
+				m_evtRdpStartWait = nullptr;
+				ResumeThread(m_hTrdStartWait);
+				WaitForSingleObject(m_hTrdStartWait, INFINITE);
+				CloseHandle(m_hTrdStartWait);
+				m_hTrdStartWait = nullptr;
+			}
 		}
 
 		return hr;
@@ -261,16 +307,55 @@ public:// interface ICTEPTransferProtocolClientCallBack
 		}
 
 		CTEPPacket_Header* pHeader = pTransChnEx->SplitPacket(pPacket);
-		m_log.FmtMessage(2, L"收到一个包:[%s]", pHeader->debugType());
 		while ( pHeader && pHeader != (CTEPPacket_Header*)-1)
 		{
-			
-			if ( pHeader->IsInitRsp())
+			m_log.FmtMessage(2, L"收到一个包:[%s] Size:%d", pHeader->debugType(), pHeader->PacketLength);
+
+			if ( pHeader->IsHello())
+			{
+				ReadWritePacket *pPacket = AllocatePacket(pTransChnEx, OP_IocpSend, sizeof(CTEPPacket_Hello));
+				if ( pPacket)
+				{
+					Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacket->buff.buff, (LPCWSTR)(pHeader+1), TRUE);
+					HRESULT hr = pTransChnEx->SendPacketClient(pPacket);
+					if ( hr != ERROR_IO_PENDING)
+					{
+						ReleasePacket(pPacket);
+					}
+				}
+				m_log.FmtMessageW(3, L"OnReadCompleted - IsHello(). [%s]", ((CTEPPacket_Hello*)pHeader)->msg);
+			}
+			else if ( pHeader->IsHelloRsp())
+			{
+				if ( pTransChnEx->type == SyncMain && m_evtRdpStartWait || m_hTrdStartWait)
+				{
+					HANDLE evt = m_evtRdpStartWait;
+					HANDLE trd = m_hTrdStartWait;
+					m_evtRdpStartWait = NULL;
+					m_hTrdStartWait = NULL;
+					SetEvent(evt);
+					CloseHandle(evt);
+					CloseHandle(trd);
+
+					ReadWritePacket* pPacketInit = AllocatePacket(pTransChnEx, OP_IocpSend, 0);
+					pPacketInit->buff.size = Create_CTEPPacket_Init((CTEPPacket_Init*)pPacketInit->buff.buff);
+					HRESULT hr = pTransChnEx->SendPacketClient(pPacketInit);
+					if ( hr != ERROR_IO_PENDING)
+						ReleasePacket(pPacketInit);
+				}
+
+				m_log.FmtMessageW(3, L"OnReadCompleted - IsHelloRsp(). [%s]", ((CTEPPacket_Hello*)pHeader)->msg);
+			}
+			else if ( pHeader->IsInitRsp())
 			{
 				CTEPPacket_Init_Responce *pInitRsp = (CTEPPacket_Init_Responce*)pHeader;
 				if ( pTransChnEx == m_UserEx.pTransChnMain)
 				{
-					ASSERT(m_UserEx.UserId == (USHORT)-1 && m_UserEx.guidUser == GUID_NULL);
+					ASSERT(
+						(m_UserEx.UserId == (USHORT)-1 && m_UserEx.guidUser == GUID_NULL)
+						||
+						(pTransChnEx->type == TCP && m_UserEx.UserId == pHeader->GetUserId() && m_UserEx.guidUser == pInitRsp->guidUserSession)
+						);
 					m_UserEx.UserId = pInitRsp->header.GetUserId();
 					m_UserEx.guidUser = pInitRsp->guidUserSession;
 					wcscpy_s(m_UserEx.wsUserName, pInitRsp->wsUserName);
@@ -368,30 +453,6 @@ public:// interface ICTEPTransferProtocolClientCallBack
 						ASSERT(0);
 					}
 				}
-			}
-			else if ( pHeader->IsHello())
-			{
-				ReadWritePacket *pPacket = AllocatePacket(pTransChnEx, OP_IocpSend, sizeof(CTEPPacket_Hello));
-				if ( pPacket)
-				{
-					Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacket->buff.buff, (LPCWSTR)(pHeader+1), TRUE);
-					HRESULT hr = pTransChnEx->SendPacketClient(pPacket);
-					if ( hr != ERROR_IO_PENDING)
-					{
-						ReleasePacket(pPacket);
-					}
-				}
-				m_log.FmtMessageW(3, L"OnReadCompleted - IsHello(). %s", ((CTEPPacket_Hello*)pHeader)->msg);
-			}
-			else if ( pHeader->IsHelloRsp())
-			{
-				if ( m_evtRdpStartWait)
-				{
-					SetEvent(m_evtRdpStartWait);
-					m_evtRdpStartWait = NULL;
-				}
-
-				m_log.FmtMessageW(3, L"OnReadCompleted - IsHelloRsp(). %s", ((CTEPPacket_Hello*)pHeader)->msg);
 			}
 			else
 			{
@@ -623,6 +684,7 @@ public:
 	}
 	virtual HRESULT WritePacket(CAppChannel *pAppChn, char* buff, ULONG size) override
 	{
+		ASSERT((DWORD)buff >= 4096 && (DWORD)buff <= 0x7fffffff);
 		HRESULT hr = E_FAIL;
 		if ( m_UserEx.bClosing)
 		{
@@ -632,7 +694,7 @@ public:
 		if ( !buff || size == 0)
 			return E_INVALIDARG;
 
-		ASSERT( size <= 64*1024);	// 测试是否有超大包
+		ASSERT( size <= 256*1024);	// 测试是否有超大包
 
 		DWORD nPacketCount = size / CTEP_DEFAULT_BUFFER_DATA_SIZE
 			+ (size % CTEP_DEFAULT_BUFFER_DATA_SIZE > 0 ? 1 : 0);
@@ -834,6 +896,7 @@ public: // Event
 		{
 			// 枚举所有App
 			ReadWritePacket* pPacket = AllocatePacket(pTransChn, OP_IocpSend, sizeof(CTEPPacket_CreateApp));
+			ASSERT(pPacket);
 			CTEPPacket_CreateApp* pHeader = (CTEPPacket_CreateApp*)pPacket->buff.buff;
 			Create_CTEPPacket_CreateApp(pHeader, m_UserEx.UserId, (USHORT)-1
 				, 0, "", 0, EmPacketLevel::Middle);
@@ -1016,6 +1079,13 @@ public:
 				pDyn = m_smapAppChn.Pop(pDyn->AppChannelId);
 				if ( pDyn)
 				{
+					if ( pDyn->piAppProtocol)
+					{
+						ICTEPAppProtocol* pi = pDyn->piAppProtocol;
+						pDyn->piAppProtocol = nullptr;
+						pi->Disconnect(&m_UserEx, pAppChnEx);
+					}
+
 					pDyn->Recycling();
 					m_queFreeAppChn.Push(pDyn);
 				}
@@ -1024,8 +1094,9 @@ public:
 
 		if ( pAppChnEx->piAppProtocol)
 		{
-			pAppChnEx->piAppProtocol->Disconnect(&m_UserEx, pAppChnEx);
+			ICTEPAppProtocol* pi = pAppChnEx->piAppProtocol;
 			pAppChnEx->piAppProtocol = nullptr;
+			pi->Disconnect(&m_UserEx, pAppChnEx);
 		}
 
 		pAppChnEx = m_smapAppChn.Pop(pAppChnEx->AppChannelId);

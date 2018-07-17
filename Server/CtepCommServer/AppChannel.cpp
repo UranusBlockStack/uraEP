@@ -355,22 +355,30 @@ void CCtepCommunicationServer::OnConnectionEstablished(CTransferChannelEx *pCont
 		pUserEx = allocateUser(pContext);
 	}
 
-	// 回复Init Response
-	ASSERT(pUserEx && pUserEx->pTransChnMain);
-	ReadWritePacket* pPacketSend = AllocateBuffer(pContext, OP_IocpSend);
-	if ( !pPacketSend)
+	if ( pBuffer->buff.size != 0)
 	{
-		m_log.Error(3, L"ConnectEstablished - AllocateBuffer Failed. No Enough Memory.");
-		goto ErrorEnd;
+		CTEPPacket_Init* pInit = (CTEPPacket_Init*)pBuffer->buff.buff;
+		// 回复Init Response
+		ASSERT(pUserEx && pUserEx->pTransChnMain);
+		ASSERT(pInit->IsPacketInit());
+		if ( pInit->IsPacketInit())
+		{
+			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, OP_IocpSend);
+			if ( !pPacketSend)
+			{
+				m_log.Error(3, L"ConnectEstablished - AllocateBuffer Failed. No Enough Memory.");
+				goto ErrorEnd;
+			}
+
+			pPacketSend->buff.size = Create_CTEPPacket_Init_Responce(
+				(CTEPPacket_Init_Responce*)pPacketSend->buff.buff
+				, pUserEx->UserId, pUserEx->dwSessionId, pUserEx->guidUser, pUserEx->wsUserName
+				, m_TS[0] ? m_TS[0]->GetPort() : 0, m_TS[1] ? m_TS[1]->GetPort() : 0
+				, m_LocalIPv4, m_nIPv4Count);
+
+			SendPacket(pContext, pPacketSend, High);
+		}
 	}
-
-	pPacketSend->buff.size = Create_CTEPPacket_Init_Responce(
-		(CTEPPacket_Init_Responce*)pPacketSend->buff.buff
-		, pUserEx->UserId, pUserEx->dwSessionId, pUserEx->guidUser, pUserEx->wsUserName
-		, m_TS[0] ? m_TS[0]->GetPort() : 0, m_TS[1] ? m_TS[1]->GetPort() : 0
-		, m_LocalIPv4, m_nIPv4Count);
-
-	SendPacket(pContext, pPacketSend, High);
 	return ;
 
 ErrorEnd:
@@ -470,6 +478,24 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 	CTEPPacket_Header* pHeader;
 	while ( nullptr != (pHeader = pContext->SplitPacket(pBuffer)))
 	{
+		if ( pHeader->IsHello())
+		{
+			ReadWritePacket *pPacketSend = AllocateBuffer(
+				pContext, OP_IocpSend, sizeof(CTEPPacket_Hello));
+			if ( pPacketSend)
+			{
+				Create_CTEPPacket_Hello((CTEPPacket_Hello*)pPacketSend->buff.buff, (LPCWSTR)(pHeader+1), TRUE);
+				SendPacket(pContext, pPacketSend, High);
+			}
+			m_log.FmtMessageW(3, L"OnReadCompleted - IsHello(). %s", ((CTEPPacket_Hello*)pHeader)->msg);
+			continue;
+		}
+		if ( pHeader->IsHelloRsp())
+		{
+			m_log.FmtMessageW(3, L"OnReadCompleted - IsHelloRsp(). %s", ((CTEPPacket_Hello*)pHeader)->msg);
+			continue;
+		}
+
 		if ( pHeader->IsInit())
 		{
 			// 回复Init Response
@@ -477,8 +503,8 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 			m_log.print(L"New Client Init. UserId:%d, TransChannelHandle:%d, Type:[%S]",pUserEx->UserId, pContext->hFile
 				, pContext->piTrans->GetName());
 
-			ReadWritePacket* pPacketSend =
-				AllocateBuffer(pUserEx->pTransChnMain, OP_IocpSend);
+			ReadWritePacket* pPacketSend = AllocateBuffer(
+				pUserEx->pTransChnMain, OP_IocpSend);
 			if ( !pPacketSend)
 			{
 				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
@@ -502,9 +528,25 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 			continue;
 		}
 
-		if ( pHeader->GetAppId() != (USHORT)-1)
+		if ( !pAppChnEx && pHeader->IsMessage())// 找不到指定的通道,可能已经被关闭了
 		{
-			ASSERT(pAppChnEx && pAppChnEx->AppChannelId == pHeader->GetAppId());
+			m_log.FmtWarning(3, L"OnReadCompleted - [IsMessage] AppId:[%d] no found.", pHeader->GetAppId());
+			// 发送关闭回复
+			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, EmPacketOperationType::OP_IocpSend, 0);
+			if ( pPacketSend)
+			{
+				pPacketSend->buff.size = Create_CTEPPacket_Header(
+					(CTEPPacket_Header*)pPacketSend->buff.buff
+					, sizeof(CTEPPacket_CloseAppRsp), CTEP_PACKET_CONTENT_CLOSE_APP_RSP
+					, pUserEx->UserId, pHeader->GetAppId());
+
+				SendPacket(pContext, pPacketSend, High);
+			}
+			else
+			{
+				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
+			}
+			continue;
 		}
 
 		if ( pHeader->IsCloseApp())
@@ -538,6 +580,13 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 				closeAppChannel(pAppChnEx);
 			}
 			continue;
+		}
+
+		if ( pHeader->GetAppId() != (USHORT)-1)
+		{
+			ASSERT(pAppChnEx && pAppChnEx->AppChannelId == pHeader->GetAppId());
+			if ( !pAppChnEx)
+				continue;
 		}
 
 		if ( pHeader->IsCreateApp())
@@ -623,7 +672,7 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 			continue;
 		}
 
-		if ( pAppChnEx && pHeader->IsMessage())
+		if ( pHeader->IsMessage())
 		{
 			CTEPPacket_Message* pMsg = (CTEPPacket_Message*)pHeader;
 
@@ -645,26 +694,6 @@ void CCtepCommunicationServer::OnReadCompleted(CTransferChannelEx *pContext, Rea
 				closeAppChannel(pAppChnEx);
 			}
 
-			continue;
-		}
-
-		if ( !pAppChnEx && pHeader->IsMessage())// 找不到指定的通道,可能已经被关闭了
-		{
-			// 发送关闭回复
-			ReadWritePacket* pPacketSend = AllocateBuffer(pContext, EmPacketOperationType::OP_IocpSend, 0);
-			if ( pPacketSend)
-			{
-				pPacketSend->buff.size = Create_CTEPPacket_Header(
-					(CTEPPacket_Header*)pPacketSend->buff.buff
-					, sizeof(CTEPPacket_CloseAppRsp), CTEP_PACKET_CONTENT_CLOSE_APP_RSP
-					, pUserEx->UserId, pHeader->GetAppId());
-
-				SendPacket(pContext, pPacketSend, High);
-			}
-			else
-			{
-				m_log.Error(3, L"OnReadCompleted - AllocateBuffer Failed. No Enough Memory.");
-			}
 			continue;
 		}
 

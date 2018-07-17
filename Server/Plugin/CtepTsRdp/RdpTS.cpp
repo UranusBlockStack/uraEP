@@ -66,11 +66,12 @@ HRESULT CTransProRdpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* 
 {
 	HANDLE hFile = pTransChn->hFile;
 	ASSERT(pTransChn && pPacket);
-	ASSERT(pPacket->hFile == pTransChn->hFile);
+	ASSERT(pPacket->hFile == pTransChn->hFile || pTransChn->bClosing || pTransChn->hFile == INVALID_HANDLE_VALUE);
 	ASSERT(pPacket->opType == EmPacketOperationType::OP_IocpRecv);
 
 	if ( hFile == INVALID_HANDLE_VALUE)
 	{
+		pPacket->ol.Internal = ERROR_HANDLES_CLOSED;
 		return E_NOINTERFACE;
 	}
 
@@ -83,6 +84,8 @@ HRESULT CTransProRdpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* 
 	if ( !bRet)
 	{
 		int dwErr = GetLastError();
+		if ( dwErr == 0)
+			dwErr = -1;
 		pPacket->ol.Internal = dwErr;
 		if ( dwErr>0)
 		{

@@ -31,7 +31,7 @@ public:
 	}
 
 public:
-	READONLY_DATA BOOL				bClosing;
+	READONLY_DATA volatile BOOL		bClosing;
 	READWRITE_DATA void*			pAppParam;
 
 	READONLY_DATA EnAppChannelType	Type;			//通道类型,静态通道或者动态通道

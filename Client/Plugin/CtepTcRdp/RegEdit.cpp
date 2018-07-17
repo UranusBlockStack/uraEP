@@ -12,7 +12,7 @@ BOOL CRegistry::CreateKey(LPCTSTR lpSubKey)
 
 	HKEY hKey;
 	DWORD dw;
-	long lReturn=RegCreateKeyEx(m_hKey,lpSubKey,0L,NULL,REG_OPTION_VOLATILE,KEY_ALL_ACCESS,NULL,&hKey,&dw);
+	long lReturn=RegCreateKeyEx(m_hKey,lpSubKey,0L,NULL, 0,KEY_ALL_ACCESS,NULL,&hKey,&dw);
 
 	if(lReturn==ERROR_SUCCESS)
 	{
@@ -167,7 +167,7 @@ BOOL CRegistry::RestoreKey(LPCTSTR lpFileName)
 	ASSERT(m_hKey);
 	ASSERT(lpFileName);
 
-	long lReturn=RegRestoreKey(m_hKey,lpFileName,REG_WHOLE_HIVE_VOLATILE);
+	long lReturn=RegRestoreKey(m_hKey,lpFileName, 0);
 
 	if(lReturn==ERROR_SUCCESS)
 		return TRUE;

@@ -9,6 +9,8 @@
 using namespace std;
 #include <Atlcoll.h>
 
+Log4CppLib g_log("RdpTran");
+
 #define  MONITOR_WND_CLASS_BASE_NAME "CTepSessionMonitorClass"
 #pragma comment(lib,"Wtsapi32.lib")
 
@@ -27,6 +29,7 @@ void AddNewSession(DWORD dwSessionId)
 	if ( pair)
 	{
 		pTransChn = pair->m_value;
+		ASSERT(!pTransChn);
 	}
 	if ( pTransChn)
 		return ;
@@ -79,7 +82,11 @@ void DeleteSession(DWORD dwSessionId)
 		{
 			HANDLE hFile = pTransChn->hFile;
 			pTransChn->hFile = INVALID_HANDLE_VALUE;
-			WTSVirtualChannelClose(hFile);
+			if ( hFile != INVALID_HANDLE_VALUE)
+			{
+				ASSERT(hFile);
+				WTSVirtualChannelClose(hFile);
+			}
 		}
 		g_mapSessionData.RemoveKey(dwSessionId);
 	}
@@ -179,21 +186,41 @@ HWND CreateMonitorWindows()
 static DWORD WINAPI SessionMonitorThread( LPVOID param)
 {
 	if ( !RegisterMonitorWndClass())//注册一个用于监视的窗口类
+	{
+		g_log.ErrorW(5, L"1");
 		goto End;
+	}
 
 	//创建一个主窗口
 	h_MainWnd = CreateMonitorWindows();
 	if( !h_MainWnd)
+	{
+		g_log.ErrorW(5, L"2");
 		goto End;
+	}
 
 	//等待Terminal Server启动，然后用WTSRegisterSessionNotification注册会话通知消息
 	//如果在RDS服务启动前调用WTSRegisterSessionNotification函数，会返回RPC_S_INVALID_BINDING错误
-	HANDLE hTermSrvReadyEvent = OpenEvent(SYNCHRONIZE, FALSE, _T("Global\\TermSrvReadyEvent"));
-	if( hTermSrvReadyEvent == NULL )
+	HANDLE hTermSrvReadyEvent = NULL;
+	DWORD dwCount = 0;
+	while ( !hTermSrvReadyEvent && ++dwCount < 100)
+	{
+		hTermSrvReadyEvent = OpenEvent(SYNCHRONIZE, FALSE, _T("Global\\TermSrvReadyEvent"));
+		if ( !hTermSrvReadyEvent)
+			Sleep(500);
+	}
+
+	if( !hTermSrvReadyEvent)
+	{
+		g_log.ErrorW(5, L"3");
 		goto End;
+	}
 
 	if( WTSRegisterSessionNotification(h_MainWnd, NOTIFY_FOR_ALL_SESSIONS) == FALSE )
+	{
+		g_log.ErrorW(5, L"4");
 		goto End;
+	}
 
 	*(BOOL*)param = TRUE;
 
