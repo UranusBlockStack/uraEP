@@ -1,18 +1,25 @@
+// 本文档描述了文件结构层面的文件名称与导出函数名.
+// 设计的有些复杂,不过我已经尽量简化了,功能很复杂,能设计成这样已经不错了!如果看不懂请多看几遍.
+// 如果还是看不懂,那一定是你智商的问题,请不要怀疑设计有缺陷,谢谢合作!
+
 #pragma once
 
 #include <windef.h>
 #include <tchar.h>
 #include "CTEP_Trans_Packet_Protocol.h"
 
-#define READWRITE_DATA
-#define READONLY_DATA
-#define OPAQUE_DATA
+#define READWRITE_DATA	// 描述一个可读写的数据
+#define READONLY_DATA	// 描述一个只读数据
+#define OPAQUE_DATA		// 描述一个不可读写的不透明数据
 
+
+// 
+// 关于文件结构,名称,与导出函数的描述
+// 
 class  CUserData;
 class  CAppChannel;
 class  CTransferChannel;
 struct ReadWritePacket;
-
 
 interface ICTEPTransferProtocolCallBack;
 interface ICTEPTransferProtocolServer;
@@ -21,40 +28,78 @@ interface ICTEPTransferProtocolClient;
 interface ICTEPAppProtocolCallBack;
 interface ICTEPAppProtocol;
 
+interface ICTEPAppProtocolStubCallBack;
+
+//	以下函数为Ctep服务器端传输层Dll的导出函数,用于与CtepCommServer对接使用,以提供对特定底层协议的连接支持(如RDP/SPICE等).
+//Dll的名称必须以名称: "CtepTs" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceTransServer	"CTEPGetInterfaceTransServer"
 typedef ICTEPTransferProtocolServer* (WINAPI *Fn_CTEPGetInterfaceTransServer)();
 ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer();
 
+//	以下函数为Ctep客户端传输层Dll的导出函数,用于与CtepCommClient对接使用,以提供对特定底层协议的连接支持(如RDP/SPICE等).
+//Dll的名称必须以名称: "CtepTc" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceTransClient	"CTEPGetInterfaceTransClient"
 typedef ICTEPTransferProtocolClient* (WINAPI *Fn_CTEPGetInterfaceTransClient)();
 ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClient();
 
+//	以下函数为Ctep服务器端应用层Dll的导出函数,用于与CtepCommServer对接使用,以实现一个基于CTEP的服务器端应用程序(如CTMMR/USBREDIR).
+//Dll的名称必须以名称: "CtepAs" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceAppServer		"CTEPGetInterfaceAppServer"
 typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppServer)();
 ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppServer();
 
+//	以下函数为Ctep客户端应用层Dll的导出函数,用于与CtepCommClient对接使用,以实现一个基于CTEP的客户端应用程序(如CTMMR/USBREDIR).
+//Dll的名称必须以名称: "CtepAc" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceAppClient		"CTEPGetInterfaceAppClient"
 typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppClient)();
 ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppClient();
 
+// 
+// 一下用于跨进程的服务器端CTEP代理/存根代码通信
+// 
 
+//	以下函数为Ctep服务器端应用层DLL的导出函数,用于与CtepAppProxy对接使用,以实现一个基于CTEP的服务器端应用程序(如CTMMR/USBREDIR).
+//Dll的名称必须以名称: "CtepAPxs" 开头,并且以dll为后缀名
+#define FUNC_CTEPGetInterfaceAppProxyServer		"CTEPGetInterfaceAppProxyServer"
+typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppProxyServer)();
+ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppProxyServer();
+
+//	以下函数用于导出跨进程使用的Ctep应用层App使用接口.
+#define FUNC_CTEPGetInterfaceAppStubCallBack	"CTEPGetInterfaceAppStubCallBack"
+typedef ICTEPAppProtocolStubCallBack* (WINAPI *Fn_CTEPGetInterfaceAppStubCallBack)();
+ICTEPAppProtocolStubCallBack* WINAPI CTEPGetInterfaceAppStubCallBack();
+
+
+
+
+// 
+// 一些通用数据结构的描述
+// 
+
+// 描述一个指定用户的用户特性数据
 class ATL_NO_VTABLE CUserData
 {
 public:
-	USHORT UserId;
-	DWORD dwSessionId;
-	WCHAR wsUserName[260];
+	CUserData() : UserId((USHORT)-1), dwSessionId((DWORD)-1)
+	{
+		wsUserName[0] = NULL;
+	}
+
+	USHORT UserId;				// -1表示无效
+	DWORD dwSessionId;			// -1表示无效
+	WCHAR wsUserName[260];		// \0表示无效
 };
 
+// 描述一个包操作类型
 enum EmPacketOperationType
 {
 	OP_Empty = 0,
-	OP_Listen,
-	OP_IocpSend,
-	OP_IocpRecv,
-	OP_PacketRecv,
+	OP_Listen,			// 监听包,用于监听新的用户连接的包
+	OP_IocpSend,		// 完成端口上的发送数据包
+	OP_IocpRecv,		// 完成端口上的接收数据包
 };
 
+// 内存模组,描述了一块内存地址以及内部的有效数据数量(单位:bytes)
 struct CBuffer
 {
 	void Init(char* buffer = 0, DWORD buffsize = 0)
@@ -68,6 +113,7 @@ struct CBuffer
 	DWORD maxlength;
 };
 
+// 一个独立的操作包
 struct ReadWritePacket
 {
 	void PacketInit()
@@ -112,6 +158,48 @@ struct ReadWritePacket
 
 	OPAQUE_DATA CHAR	 cBuf[CTEP_DEFAULT_BUFFER_SIZE];
 };
+
+
+
+// 
+// 一些消息型回调函数的函数格式定义
+
+//默认函数形式,占位使用
+typedef void (WINAPI *Call_BaseFunction)(void* pParam);
+
+//windows用户会话消息回调函数格式定义,当有会话消息时,CTEP Comm模块通知其他模组.
+//wParam value is:
+//	WTS_CONSOLE_CONNECT			0x1 	A session was connected to the console terminal.
+//	WTS_CONSOLE_DISCONNECT		0x2		A session was disconnected from the console terminal.
+//	WTS_REMOTE_CONNECT			0x3		A session was connected to the remote terminal.
+//	WTS_REMOTE_DISCONNECT		0x4		A session was disconnected from the remote terminal.
+//	WTS_SESSION_LOGON			0x5		A user has logged on to the session.
+//	WTS_SESSION_LOGOFF			0x6		A user has logged off the session.
+//	WTS_SESSION_LOCK				0x7		A session has been locked.
+//	WTS_SESSION_UNLOCK			0x8		A session has been unlocked.
+//	WTS_SESSION_REMOTE_CONTROL	0x9		A session has changed its remote controlled status. To determine the status, call GetSystemMetrics and check the SM_REMOTECONTROL metric.
+//lParam vallue is: SessionId.
+typedef void (WINAPI *Call_SessionEvent)(void *pParam, WPARAM wParam, LPARAM lParam);
+
+
+struct StCallEvent
+{
+	void* pParam;
+	union
+	{
+		Call_BaseFunction  fnBase;
+		Call_SessionEvent  fnSessionEvent;
+	};
+
+	enum EmEventType
+	{
+		none = 0,
+		SessionEvent,
+	}type;
+};
+
+
+
 
 
 

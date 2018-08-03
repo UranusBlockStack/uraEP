@@ -6,14 +6,76 @@
 #include "CTEP_Communicate_TransferLayer_Interface.h"
 #include "CTEP_Communicate_App_Interface.h"
 
+struct CallBackList
+{
+	CallBackList(StCallEvent::EmEventType inType, DWORD inMaxLength = 32)	// 设置最大可以存储的回调个数
+	{
+		type = inType;
+		lstMaxLength = inMaxLength;
+		lstCall = new StCallEvent[inMaxLength];
+		ZeroMemory(lstCall, sizeof(StCallEvent) * inMaxLength);
+		lstCount = 0;
+	}
+	~CallBackList()
+	{
+		delete [] lstCall;
+	}
+
+	HRESULT Insert(const StCallEvent& lstCall)
+	{
+		ASSERT(lstCall.type == type);
+		return Insert(lstCall.pParam, lstCall.fnBase);
+	}
+	HRESULT Insert(void* pParam, Call_BaseFunction fn)
+	{
+		LOCK(&lck);
+		if ( lstCount < lstMaxLength)
+		{
+			lstCall[lstCount].type = type;
+			lstCall[lstCount].pParam = pParam;
+			lstCall[lstCount].fnBase = fn;
+			lstCount++;
+			return S_OK;
+		}
+
+		return E_OUTOFMEMORY;
+	}
+	HRESULT Remove(Call_BaseFunction fn)
+	{
+		LOCK(&lck);
+		for (DWORD i = 0; i < lstCount; i++)
+		{
+			if ( lstCall[i].fnBase == fn)
+			{
+				lstCall[i] = lstCall[lstCount - 1];
+				ZeroObject(lstCall[lstCount - 1]);
+				lstCount--;
+
+				return S_OK;
+			}
+		}
+
+		return E_NOTFOUND;
+	}
+
+public:
+	CMyCriticalSection			lck;
+
+	StCallEvent*				lstCall;
+	DWORD						lstCount;
+	DWORD						lstMaxLength;
+	StCallEvent::EmEventType	type;
+};
+
 // 这是per-Handle数据。它包含了一个套节字的信息
 class __declspec(novtable) CTransferChannelEx : public CTransferChannel
 {
 	Log4CppLib m_log;
 public:
-	CTransferChannelEx() : rbufPacket(cPacketBuf, sizeof(cPacketBuf)-4, sizeof(CTEPPacket_Header), CTEP_DEFAULT_BUFFER_SIZE)
-		, m_log("TransChnEx")
+	CTransferChannelEx() : m_log("TransChnEx")
 	{
+		rbufPacket.Init(cPacketBuf, sizeof(cPacketBuf)-4, sizeof(CTEPPacket_Header)
+			, CTEP_DEFAULT_BUFFER_SIZE, CDynamicRingBuffer::defaultGetBagSize);
 		bNeedNotificationClosing = FALSE;
 		InitEx();
 	}
@@ -58,8 +120,13 @@ public:
 	}
 	inline HRESULT SendPacketServer(ReadWritePacket* pBuffer)
 	{
+		::EnterCriticalSection(&lckSend);
 		ASSERT( pBuffer->buff.size <= CTEP_DEFAULT_BUFFER_SIZE);
-		return piTrans->PostSend(this, pBuffer);
+		SequenceIdLocal++;
+		((CTEPPacket_Header*)pBuffer->buff.buff)->SequenceId = SequenceIdLocal;
+		HRESULT hr = piTrans->PostSend(this, pBuffer);
+		::LeaveCriticalSection(&lckSend);
+		return hr;
 	}
 
 	int PreSplitPacket(ReadWritePacket* pPacket)
@@ -79,7 +146,7 @@ public:
 		}
 #endif // _DEBUG
 		
-		dwPacketSize = rbufPacket.PushDataAndPop(pPacket->buff.size);
+		dwPacketSize = (LONG32)rbufPacket.PushData(pPacket->buff.size);
 		ASSERT(dwPacketSize >= 0);
 
 #ifdef _DEBUG
@@ -110,7 +177,7 @@ public:
 			ASSERT(pPacket->buff.buff == rbufPacket.m_pDataEnd);
 		}
 #endif // _DEBUG
-		dwPacketSize = rbufPacket.PushDataAndPop(pPacket->buff.size, (void**)&pHeader);
+		dwPacketSize = (LONG32)rbufPacket.PushDataAndPop(pPacket->buff.size, (void**)&pHeader);
 		pPacket->buff.size = 0;
 
 		if ( dwPacketSize < 0)
@@ -124,7 +191,10 @@ public:
 		*pdwMagic = 0x12345678;
 #endif // _DEBUG
 
-		SequenceIdRemote++;
+		if ( SequenceIdRemote == 0 || pHeader->SequenceId == 0 || pHeader->SequenceId == 1)
+			SequenceIdRemote = pHeader->SequenceId;
+		else
+			SequenceIdRemote++;
 		if ( SequenceIdRemote != pHeader->SequenceId)
 		{
 			m_log.FmtError(0x7, L"SequenceIdRemote:%d != pHeader->SequenceId:%d"
@@ -177,6 +247,7 @@ class CAppChannelEx : public CAppChannel, public CMyCriticalSection
 public:
 	CAppChannelEx()
 	{
+		sAppName = nullptr;
 		pAppParam = nullptr;
 		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
 		bufData.buff = nullptr;
@@ -194,6 +265,7 @@ public:
 
 		RemoveLink();
 
+		sAppName = nullptr;
 		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
 		pUser = nullptr;
 		ASSERT(pAppParam == nullptr);
@@ -205,11 +277,12 @@ public:
 		nCount = 0;
 	}
 
-	void Initialize(CUserDataEx *pUserEx, ICTEPAppProtocol* piAppProt, 
-		CAppChannelEx *pStaAppChn /*= nullptr*/, EmPacketLevel level /*= Middle*/, USHORT option /*= 0*/)
+	void Initialize(CUserDataEx *inUserEx, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName,
+		CAppChannelEx *inStaAppChn /*= nullptr*/, EmPacketLevel inlevel /*= Middle*/, USHORT inOption /*= 0*/)
 	{
 		pNext = nullptr;
-		pStaticAppChannel = pStaAppChn;
+		sAppName = inAppName;
+		pStaticAppChannel = inStaAppChn;
 		pNextDynamicAppChannel = nullptr;
 
 		bClosing = FALSE;
@@ -219,27 +292,27 @@ public:
 			free(bufData.buff);
 		}
 		bufData.Init();
-		pUser = pUserEx;
+		pUser = inUserEx;
 		ASSERT(pAppParam == nullptr);
 		pAppParam = nullptr;
 		AppChannelId = (USHORT)-1;
-		piAppProtocol = piAppProt;
-		Level = level;
-		uPacketOption = option;
+		piAppProtocol = inpiAppProt;
+		Level = inlevel;
+		uPacketOption = inOption;
 		ASSERT(pUser);
 		ASSERT( !pStaticAppChannel || 0 == (uPacketOption&Packet_Can_Lost));
 
-		if ( pStaticAppChannel && (uPacketOption&Packet_Can_Lost) && pUserEx->pTransChnUdp)
+		if ( pStaticAppChannel && (uPacketOption&Packet_Can_Lost) && inUserEx->pTransChnUdp)
 		{
-			this->pTransChannel = pUserEx->pTransChnUdp;
+			this->pTransChannel = inUserEx->pTransChnUdp;
 		}
-		else if ( pUserEx->pTransChnTcp)
+		else if ( inUserEx->pTransChnTcp)
 		{
-			this->pTransChannel = pUserEx->pTransChnTcp;
+			this->pTransChannel = inUserEx->pTransChnTcp;
 		}
-		else if ( pUserEx->pTransChnMain)
+		else if ( inUserEx->pTransChnMain)
 		{
-			this->pTransChannel = pUserEx->pTransChnMain;
+			this->pTransChannel = inUserEx->pTransChnMain;
 		}
 		else
 		{

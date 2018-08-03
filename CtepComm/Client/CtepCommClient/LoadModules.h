@@ -147,10 +147,14 @@ public:
 				{
 					m_TS[m_TransCount++] = (ICTEPTransferProtocolServer*)pI;
 				}
+				DbgPrintf("Debug: %s file name:[%ws] TransName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
 			}
 			else
 			{
 				m_APP[m_AppCount++] = (ICTEPAppProtocol*)pI;
+				DbgPrintf("Debug: %s file name:[%ws] AppName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
 			}
 		}
 		while ( FindNextFile(hDirectory, &FindFileData));

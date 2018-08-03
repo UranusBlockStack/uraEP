@@ -6,8 +6,25 @@
 #include "CommonInclude/Tools/AdapterInformation.h"
 
 #include "CommonInclude/Tools/SerialNumColloction.h"
+#include "CommonInclude/Tools/ProcessThread.h"
+
 #pragma comment(lib, "Rpcrt4")//UuidCreate()
 
+class CSessionMessageCallBackList : public CallBackList
+{
+public:
+	CSessionMessageCallBackList():CallBackList(StCallEvent::SessionEvent){}
+
+	void evtSessionMessage(WPARAM wParam, LPARAM lParam)
+	{
+		LOCK(&lck);
+		for ( DWORD i=0; i < this->lstCount; i++)
+		{
+			if ( lstCall[i].fnSessionEvent)
+				lstCall[i].fnSessionEvent(lstCall[i].pParam, wParam, lParam);
+		}
+	}
+};
 
 class CCtepCommunicationServer
 	: public CIOCPServer , public ICTEPAppProtocolCallBack
@@ -21,9 +38,16 @@ class CCtepCommunicationServer
 	in_addr m_LocalIPv4[10];//记录了本地机器的IP地址
 	DWORD	m_nIPv4Count;
 
+	CWorkerThread<CCtepCommunicationServer>	m_ThreadCallBack;
+	DWORD TrdCallBackEventWorker(LPVOID, HANDLE);
+public:
+	CSessionMessageCallBackList m_CallBackList_SessionEvent;
+
 public:
 	CCtepCommunicationServer():m_log("Svr")
 	{
+		m_ThreadCallBack.Initialize(this, &CCtepCommunicationServer::TrdCallBackEventWorker);
+
 		CAppChannelEx* pAppChn = new CAppChannelEx();
 		pAppChn->Recycling();
 		m_queFreeAppChn.Initialize(pAppChn, TRUE, TRUE, 150);
@@ -33,9 +57,58 @@ public:
 	}
 
 public:
+//interface CTEP 2.0
+	virtual HRESULT RegisterCallBackEvent(StCallEvent Calls[], DWORD dwCallCount) override
+	{
+		HRESULT hr = S_OK;
+		ASSERT(Calls && dwCallCount > 0);
+		for (DWORD i = 0; i < dwCallCount; i++)
+		{
+			if ( Calls[i].type == StCallEvent::SessionEvent)
+			{
+				m_CallBackList_SessionEvent.Insert(Calls[i]);
+			}
+			else
+			{
+				ASSERT(NULL);
+				Calls[i].fnBase = nullptr;
+				hr = S_FALSE;
+			}
+		}
+
+		return hr;
+	}
+	virtual HRESULT UnregisterCallBackEvent(StCallEvent Calls[], DWORD dwCallCount) override
+	{
+		HRESULT hr = S_OK;
+		ASSERT(Calls && dwCallCount > 0);
+		for (DWORD i = 0; i < dwCallCount; i++)
+		{
+			if ( Calls[i].type == StCallEvent::SessionEvent)
+			{
+				HRESULT hrRemove = m_CallBackList_SessionEvent.Remove(Calls[i].fnBase);
+				if ( SUCCEEDED(hrRemove))
+				{
+					Calls[i].fnBase = nullptr;
+				}
+				else
+				{
+					hr = hrRemove;
+				}
+			}
+			else
+			{
+				hr = S_FALSE;
+			}
+		}
+
+		return hr;
+	}
+
 //interface ICTEPAppProtocolCallBack
 	virtual CAppChannel* LockChannel(USHORT AppChannelId) override
 	{
+		LOCK(&m_smapAppChn);
 		CAppChannelEx* pAppChannel = m_smapAppChn.Find(AppChannelId);
 		if ( !pAppChannel)
 			return nullptr;
@@ -80,7 +153,17 @@ public:
 	{
 		ReleaseBuffer(p);
 	}
-
+	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size) override
+	{
+		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		if ( pAppChannel)
+		{
+			HRESULT hr = WritePacket(pAppChannel, buff, size);
+			UnlockChannel(pAppChannel);
+			return hr;
+		}
+		return E_INVALIDARG;
+	}
 	virtual HRESULT WritePacket(CAppChannel *pAppChn, char* buff, ULONG size) override;
 	virtual HRESULT WritePacket(CAppChannel *pAppChn, ReadWritePacket *pPacket) override
 	{
@@ -91,15 +174,24 @@ public:
 	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pStaticChannel
 		 , EmPacketLevel level = Middle, USHORT option = NULL) override;// CAppChannel::uPacketOption option
 	virtual void	CloseDynamicChannel(CAppChannel* pDynamicChannel) override;
+	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId) override
+	{
+		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		if ( pAppChannel)
+		{
+			CloseDynamicChannel(pAppChannel);
+			UnlockChannel(pAppChannel);
+			return S_OK;
+		}
+		return E_NOTFOUND;
+	}
 
 private://internal function
-// 	CAppChannelEx* CreateStaticChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt
-// 		, EmPacketLevel level = Middle, USHORT option = 0);// CAppChannel::uPacketOption option
-	void	CloseStaticChannel(CAppChannel* pStaticChannel);
+	void	closeStaticChannel(CAppChannel* pStaticChannel);
 
 	inline void closeAppChannel(CAppChannel* pAppChannel);			// close static channel.
 
-	CAppChannelEx* allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt
+	CAppChannelEx* allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt, LPCSTR sAppName
 		, CAppChannelEx *pStaAppChn = nullptr, EmPacketLevel level = Middle, USHORT option = 0);
 	void releaseAppChannel(CAppChannelEx* pAppChnEx);
 

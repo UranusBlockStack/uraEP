@@ -8,8 +8,7 @@
 #define DbgPrintf(...)
 #endif
 
-#include "../Plugin/CTEPTSTcp/CTEPTSTcp.h"
-
+#include "CommonInclude/Tools/MoudlesAndPath.h"
 class CLoadModules
 {
 #define   MAXCOUNT_TRANS_MODULES 16 // 最多管理的模块总数
@@ -64,12 +63,11 @@ public:
 			m_AppCount = 0;
 		}
 
-		
+
 		GetNameCover* pI = 0;
 
-		if ( !GetModuleFileName(GetModuleHandle(0), TargetDirectory, MAX_PATH))
+		if ( !GetSelfDir(TargetDirectory))
 			return 0-GetLastError();
-		*(1+wcsrchr(TargetDirectory, L'\\')) = NULL;
 		if ( Directory)
 		{
 			wcscat_s(TargetDirectory, Directory);
@@ -100,66 +98,71 @@ public:
 		}
 
 		hDirectory = FindFirstFile(TargetDirectory, &FindFileData);
-		if (hDirectory != INVALID_HANDLE_VALUE)
+		if (hDirectory == INVALID_HANDLE_VALUE)
 		{
-			DbgPrintf("The first file found is %ws\n", FindFileData.cFileName);
-			HMODULE hModule = NULL;
-
-			do
-			{
-				DbgPrintf("Debug: %s file name: %ws\n", __FUNCTION__, FindFileData.cFileName);
-				hModule = LoadLibrary(FindFileData.cFileName);
-				if ( !hModule)
-					continue;
-
-				fn = (Fn_GetInterface)GetProcAddress(hModule, pFuncName);
-				if ( !fn || !(pI = fn()))
-				{
-					FreeLibrary(hModule);
-					continue;
-				}
-
-				iCount++;
-				if (eType == CtepTransServer || eType == CtepTransClient)
-				{
-					if ( !_stricmp("TCP", pI->GetName()))
-					{
-						m_TS[0] = (ICTEPTransferProtocolServer*)pI;
-					}
-					else if ( !_stricmp("UDP", pI->GetName()))
-					{
-						m_TS[1] = (ICTEPTransferProtocolServer*)pI;
-					}
-					else
-					{
-						m_TS[m_TransCount++] = (ICTEPTransferProtocolServer*)pI;
-					}
-				}
-				else
-				{
-					m_APP[m_AppCount++] = (ICTEPAppProtocol*)pI;
-				}
-			}
-			while ( FindNextFile(hDirectory, &FindFileData));
-
-			FindClose(hDirectory);
-		}
-		else
-		{
-			if (ERROR_FILE_NOT_FOUND != GetLastError())
+			if (ERROR_FILE_NOT_FOUND != GetLastError ())
 			{
 				DbgPrintf ("error: %s FindFirstFile: %d\n", __FUNCTION__, GetLastError());
 			}
+			return 0 - GetLastError();
 		}
+
+		DbgPrintf("The first file found is %ws\n", FindFileData.cFileName);
+		HMODULE hModule = NULL;
+
+		do
+		{
+			WCHAR Path[MAX_PATH+1];
+			GetSelfDir(Path);
+			if ( Directory)
+			{
+				wcscat_s(Path, Directory);
+				wcscat_s(Path, L"\\");
+			}
+			wcscat_s(Path, FindFileData.cFileName);
+			DbgPrintf("Debug: %s file name: %ws\n", __FUNCTION__, Path);
+			hModule = LoadLibrary(Path);
+			if ( !hModule)
+				continue;
+
+			fn = (Fn_GetInterface)GetProcAddress(hModule, pFuncName);
+			if ( !fn || !(pI = fn()))
+			{
+				FreeLibrary(hModule);
+				continue;
+			}
+
+			iCount++;
+			if (eType == CtepTransServer || eType == CtepTransClient)
+			{
+				if ( !_stricmp("TCP", pI->GetName()))
+				{
+					m_TS[0] = (ICTEPTransferProtocolServer*)pI;
+				}
+				else if ( !_stricmp("UDP", pI->GetName()))
+				{
+					m_TS[1] = (ICTEPTransferProtocolServer*)pI;
+				}
+				else
+				{
+					m_TS[m_TransCount++] = (ICTEPTransferProtocolServer*)pI;
+				}
+				DbgPrintf("Debug: %s file name:[%ws] TransName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
+			}
+			else
+			{
+				m_APP[m_AppCount++] = (ICTEPAppProtocol*)pI;
+				DbgPrintf("Debug: %s file name:[%ws] AppName:[%s]\n\n"
+					, __FUNCTION__, FindFileData.cFileName, pI->GetName());
+			}
+		}
+		while ( FindNextFile(hDirectory, &FindFileData));
+
+		FindClose(hDirectory);
 
 		if (eType == CtepTransServer || eType == CtepTransClient)
 		{
-			if ( eType == CtepTransServer && m_TS[0] == nullptr)
-			{
-				iCount += 1;
-				m_TS[0] = CTEPGetInterfaceTransServer();
-			}
-
 			if ( iCount == 0)
 			{
 				m_TransCount = 0;

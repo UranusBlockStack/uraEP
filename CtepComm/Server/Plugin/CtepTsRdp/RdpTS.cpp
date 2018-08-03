@@ -18,15 +18,28 @@ ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer()
 HRESULT CTransProRdpSvr::InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack)
 {
 	ASSERT(piCallBack);
-	if( !CtepTsRdpMainThreadInit())
-		return E_FAIL;
+	ASSERT(m_piCallBack == NULL || m_piCallBack == piCallBack);
 
-	m_piCallBack = piCallBack;
-	return S_OK;
+	HRESULT hr;
+	if ( m_piCallBack == piCallBack)
+		return S_FALSE;
+
+	StCallEvent sce;
+	sce.fnSessionEvent = CallSessionEvent;
+	sce.pParam = this;
+	sce.type = StCallEvent::SessionEvent;
+	hr = piCallBack->RegisterCallBackEvent(&sce, 1);
+	if ( SUCCEEDED(hr))
+	{
+		m_piCallBack = piCallBack;
+	}
+
+	return hr;
 }
 
 HRESULT CTransProRdpSvr::PostListen(bool bFirst)
 {
+	ASSERT(m_piCallBack);
 	return S_OK;
 }
 
@@ -66,11 +79,12 @@ HRESULT CTransProRdpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* 
 {
 	HANDLE hFile = pTransChn->hFile;
 	ASSERT(pTransChn && pPacket);
-	ASSERT(pPacket->hFile == pTransChn->hFile);
+	ASSERT(pPacket->hFile == pTransChn->hFile || pTransChn->bClosing || pTransChn->hFile == INVALID_HANDLE_VALUE);
 	ASSERT(pPacket->opType == EmPacketOperationType::OP_IocpRecv);
 
 	if ( hFile == INVALID_HANDLE_VALUE)
 	{
+		pPacket->ol.Internal = ERROR_HANDLES_CLOSED;
 		return E_NOINTERFACE;
 	}
 
@@ -79,10 +93,12 @@ HRESULT CTransProRdpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* 
 
 	pPacket->opType = EmPacketOperationType::OP_IocpRecv;
 
-	BOOL bRet = WTSVirtualChannelRead(hFile, 0, pPacket->buff.buff, pPacket->buff.maxlength, &pPacket->ol.InternalHigh);
+	BOOL bRet = WTSVirtualChannelRead(hFile, 0, pPacket->buff.buff, pPacket->buff.maxlength, (PULONG)&pPacket->ol.InternalHigh);
 	if ( !bRet)
 	{
 		int dwErr = GetLastError();
+		if ( dwErr == 0)
+			dwErr = -1;
 		pPacket->ol.Internal = dwErr;
 		if ( dwErr>0)
 		{
@@ -154,19 +170,25 @@ HRESULT CTransProRdpSvr::Disconnect(CTransferChannel* pTransChn, ReadWritePacket
 
 void CTransProRdpSvr::Final()
 {
-	CtepTsRdpMainThreadClose();
+	if ( m_piCallBack)
+	{
+		StCallEvent sce;
+		sce.fnSessionEvent = CallSessionEvent;
+		sce.pParam = this;
+		sce.type = StCallEvent::SessionEvent;
+		m_piCallBack->UnregisterCallBackEvent(&sce, 1);
+	}
 	m_piCallBack = NULL;
 }
-
-
-
 
 
 SOCKET CTransProRdpSvr::GetListenSocket()
 {
 	return INVALID_SOCKET;
 }
+
 long CTransProRdpSvr::GetDuration(ReadWritePacket* pPacket)
 {
 	return -1;
 }
+

@@ -50,6 +50,8 @@ HRESULT CRdpTransferClient::Connect(CTransferChannel* pTransChn, ReadWritePacket
 
 	m_pTransChn = pTransChn;
 
+	m_piCallBack->Connected(pTransChn);
+
 	if ( pPacket)
 	{
 		hr = Send(pTransChn, pPacket);

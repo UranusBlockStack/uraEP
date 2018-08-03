@@ -60,7 +60,7 @@ public:
 	ULONG GetCurrentConnection()
 	{
 		//LOCK(&m_lcklstConnection);
-		return m_lstConnection.GetCount();
+		return (ULONG)m_lstConnection.GetCount();
 	}
 
 	// 向指定客户发送文本

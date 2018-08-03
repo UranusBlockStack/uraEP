@@ -122,6 +122,13 @@ public:
 	}
 
 	virtual LPCSTR   GetName() override	{	return "TestApp";}// AppName character count <= 15
+	virtual DWORD    GetNameCount() override {return 1;}
+	virtual LPCSTR   GetNameIndex(long iIndex = 0) override	// AppName character count <= 15, 用于Proxy支持多个App的代理使用
+	{
+		if ( iIndex == 0)
+			return GetName();
+		return "";
+	}
 
 	virtual HRESULT  Initialize(ICTEPAppProtocolCallBack* pI, DWORD dwType) override
 	{
@@ -222,7 +229,7 @@ public:
 	}
 	virtual void	 Disconnect(CUserData* pUser, CAppChannel *pAppChannel)
 	{
-		m_log.FmtMessage(5, L"Disconnect App. AppId:%d[%s]", pAppChannel->AppChannelId, debugEmAppChannelType(pAppChannel->Type));
+		m_log.FmtMessage(5, L"Disconnect App. AppId:%d[%s]", pAppChannel->AppChannelId, pAppChannel->debugType());
 
 		PerUserApp* pUA = (PerUserApp*)pAppChannel->pAppParam;
 		pAppChannel->pAppParam = nullptr;
@@ -230,8 +237,6 @@ public:
 		delete pUA;
 		
 	}
-
-
 }
 gOne;
 

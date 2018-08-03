@@ -1,4 +1,4 @@
-#pragma once
+  #pragma once
 
 #include <Ws2tcpip.h>
 #include "CTEP_Common_struct.h"
@@ -87,7 +87,7 @@ public:
 	};
 };
 
-
+// CTEP底层传输层 Server端回调接口
 interface ICTEPTransferProtocolCallBack
 {
 	//支持完成端口
@@ -97,6 +97,10 @@ interface ICTEPTransferProtocolCallBack
 
 	virtual ReadWritePacket* AllocatePacket(ICTEPTransferProtocolServer* pI) = 0;
 	virtual void FreePacket(ReadWritePacket* ) = 0;
+
+	// CTEP 2.0
+	virtual HRESULT RegisterCallBackEvent(StCallEvent Calls[], DWORD dwCallCount) = 0;
+	virtual HRESULT UnregisterCallBackEvent(StCallEvent Calls[], DWORD dwCallCount) = 0;
 };
 
 interface ICTEPTransferProtocolServer

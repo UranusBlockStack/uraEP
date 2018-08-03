@@ -167,7 +167,7 @@ BOOL CVirtualChannelManager::WriteDataToChannel(ReadWritePacket* pPacket)
 	m_lckSend.Lock();
 	UINT ui = m_pEntryPoints->pVirtualChannelWrite(m_Channel->m_dwChannelNum, pPacket->buff.buff
 		, pPacket->buff.size, pPacket);
-	ASSERT(ui == CHANNEL_RC_OK);
+
 #ifdef _DEBUG
 	CTEPPacket_Header* pHead = (CTEPPacket_Header*)pPacket->buff.buff;
 	ASSERT(pHead->magic == 'E');

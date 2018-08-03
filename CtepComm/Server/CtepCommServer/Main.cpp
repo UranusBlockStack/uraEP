@@ -5,7 +5,10 @@
 #include <Locale.h>
 #include "CommonInclude/ServiceImpl.h"
 #include "CommonInclude/MainImpl.h"
+#include "CommonInclude/Tools/MoudlesAndPath.h"
 
+#include "CommonInclude/Tools/FirewallConfig.h"
+#include "CommonInclude/Tools/FirewallConfig.cpp"
 
 BOOL WINAPI HandlerRoutine(__in  DWORD dwCtrlType);
 
@@ -21,13 +24,15 @@ public:
 		ASSERT(bRet);
 #endif // _DEBUG
 	}
-	virtual HRESULT STDMETHODCALLTYPE RunStop()
+
+public:
+	virtual HRESULT STDMETHODCALLTYPE RunStop() override
 	{
 		Shutdown();
 		return S_OK;
 	}
 
-	virtual DWORD	_upStartRunService(DWORD argc, LPTSTR *argv)
+	virtual DWORD	_upStartRunService(DWORD argc, LPTSTR *argv) override
 	{
 		UNREFERENCED_PARAMETER(argc);
 		UNREFERENCED_PARAMETER(argv);
@@ -35,11 +40,28 @@ public:
 	}
 
 #ifdef _DEBUG
-	virtual DWORD   STDMETHODCALLTYPE RunRun()
+	virtual DWORD   STDMETHODCALLTYPE RunRun() override
 	{
 		return _upStartRunService(0, 0);
 	}
 #endif // _DEBUG
+
+	// -Install
+	virtual HRESULT STDMETHODCALLTYPE InstallService(DWORD dwArgc, LPTSTR *lpszArgv) override
+	{
+		HRESULT hr = __super::InstallService(dwArgc, lpszArgv);
+		if ( SUCCEEDED(hr))
+		{
+			WCHAR path[MAX_PATH] = {0};
+			GetSelfDir(path);
+
+			// Ìí¼Ó·À»ðÇ½
+			CFireWallAdd::FireWallWindows_Add(path, L"CTEP Foundation Architecture");
+		}
+
+		return hr;
+	}
+
 };
 CMyObjectSolid<CSimpleMain<CMyService>> gOneApp;
 

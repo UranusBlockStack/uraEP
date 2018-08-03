@@ -35,7 +35,6 @@ public:
 	HANDLE InitChannel(const char* pChannelName = "CTEP");
 	//同步发送数据
 	BOOL WriteDataToChannel(ReadWritePacket* pPacket);
-	//void HandleChannelData(DWORD dwChannel,char* pData,DWORD dwSize);
 	void OpenChannelByInitHandle(LPVOID pInitHandle);
 	void ChannelWriteComplete(ReadWritePacket* pPacket)
 	{

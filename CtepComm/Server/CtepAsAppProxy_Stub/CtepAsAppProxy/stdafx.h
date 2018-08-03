@@ -18,16 +18,7 @@
 #include <atlstr.h>
 
 // TODO: 在此处引用程序需要的其他头文件
-#include "Log4Cpp_Lib/Log4CppLib.h"
-#pragma comment(lib, "log4cpplib")
+#include "Log4Cpp_Lib/log4cpplib.h"
 using namespace _Log4Cpp;
 
-
 #include "CommonInclude/CommonImpl.h"
-#include "Interface/CTEP_Communicate_TransferLayer_Interface.h"
-#include "Interface/CTEP_Communicate_App_Interface.h"
-
-
-
-
-

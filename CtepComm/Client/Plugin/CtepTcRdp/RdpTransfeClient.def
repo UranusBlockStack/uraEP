@@ -2,3 +2,6 @@ LIBRARY
 
 EXPORTS 
         VirtualChannelEntry @1
+		DllRegisterServer		PRIVATE
+		DllUnregisterServer		PRIVATE
+		DllInstall				PRIVATE
