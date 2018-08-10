@@ -38,7 +38,7 @@ void AddNewSession(DWORD dwSessionId)
 	DWORD len = 0;
 
 	//需要获取会话用户名,通信层去管理,分配一个结构
-	BOOL bRet = WTSQuerySessionInformation(WTS_CURRENT_SERVER_HANDLE, dwSessionId, WTSUserName,&userName, &len);
+	BOOL bRet = WTSQuerySessionInformation(WTS_CURRENT_SERVER_HANDLE, dwSessionId, WTSUserName, &userName, &len);
 	if ( !bRet || 0 == wcslen(userName))
 		goto End;
 

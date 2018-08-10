@@ -5,31 +5,13 @@
 
 enum EnTransferChannelType
 {
-	TransTypeEmpty = 0,
-	TCP,
-	UDP,
-	IocpMain,
-	SyncMain,
+	TransType_Empty = 0,
+	TransType_TCP,			//TCP socket连接,可作为主通道和辅助通道;
+	TransType_UDP,			//UDP socket连接,只能作为辅助通道,目前未实现
+	TransType_IocpMain,		//支持完成端口类型的主通道,如:CTVP,管道等
+	TransType_SyncMain,		//不支持完成端口的主通道,如:ICA,RDP等
+	TransType_CrossApp,		//服务器端跨进程动态应用通道专用底层通道,用支持IOCP的命名管道实现
 };
-
-inline LPWSTR debugEnTransfaerChannelType(EnTransferChannelType type)
-{
-	switch(type)
-	{
-	case TransTypeEmpty:
-		return L"TransTypeEmpty";
-	case TCP:
-		return L"TCP";
-	case UDP:
-		return L"UDP";
-	case IocpMain:
-		return L"IocpMain";
-	case SyncMain:
-		return L"SyncMain";
-
-	}
-	return L"EnTransferChannelType??????";
-}
 
 class __declspec(novtable) CTransferChannel	// 一条底层传输通道, 表示与一个用户会话的连接
 {
@@ -53,7 +35,7 @@ public:
 		hFile = INVALID_HANDLE_VALUE;
 		ZeroObject(addrLocal6);
 		ZeroObject(addrRemote6);
-		type = EnTransferChannelType::TransTypeEmpty;
+		type = EnTransferChannelType::TransType_Empty;
 	}
 	READWRITE_DATA DWORD dwSessionId;
 	READWRITE_DATA void *pParam;
@@ -85,6 +67,27 @@ public:
 		ICTEPTransferProtocolServer *piTrans;
 		ICTEPTransferProtocolClient *piTransClt;
 	};
+
+public:
+	inline LPWSTR debugEnTransfaerChannelType()
+	{
+		switch(type)
+		{
+		case TransType_Empty:
+			return L"TransType_Empty";
+		case TransType_TCP:
+			return L"TransType_TCP";
+		case TransType_UDP:
+			return L"TransType_UDP";
+		case TransType_IocpMain:
+			return L"TransType_IocpMain";
+		case TransType_SyncMain:
+			return L"TransType_SyncMain";
+		case TransType_CrossApp:
+			return L"TransType_CrossApp";
+		}
+		return L"EnTransferChannelType??????";
+	}
 };
 
 // CTEP底层传输层 Server端回调接口

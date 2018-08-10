@@ -1,24 +1,18 @@
 #pragma once
-
-#include "cchannel.h"
-#include "pchannel.h"
-
 #include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
-#include "windows.h"
-#include "tchar.h"
-#include "psapi.h"
-
-
-#pragma comment(lib, "iphlpapi.lib")
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib,"psapi.lib")
+#include "channel-ctvp.h"
 
 #include "Interface\CTEP_Communicate_TransferLayer_Interface.h"
 #include "../../CtepCommClient/CtepCommClientExport.h"
 
-class CVirtualChannelManager : public ICTEPTransferProtocolClient
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include "psapi.h"
+
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib,"psapi.lib")
+class CCTVPVirtualChannelManager : public ICTEPTransferProtocolClient
 {
 	struct VIRTUAL_CHANNEL_ITEM
 	{
@@ -29,8 +23,8 @@ class CVirtualChannelManager : public ICTEPTransferProtocolClient
 	};
 
 public:
-	CVirtualChannelManager(PCHANNEL_ENTRY_POINTS pEntryPoints);
-	~CVirtualChannelManager();
+	CCTVPVirtualChannelManager(PCTVPCHANNEL_ENTRY_POINTS pEntryPoints);
+	~CCTVPVirtualChannelManager();
 
 	HANDLE InitChannel(const char* pChannelName = "CTEP");
 	//同步发送数据
@@ -38,16 +32,21 @@ public:
 	void OpenChannelByInitHandle(LPVOID pInitHandle);
 	void ChannelWriteComplete(ReadWritePacket* pPacket)
 	{
+		ASSERT(m_piCallBack);
+		if (m_piCallBack == NULL)
+		{
+			return;
+		}
 		m_piCallBack->FreePacket(pPacket);
 	}
 	void CloseChannelByInitHandle(LPVOID pInitHandle);
+	//int GetTCPLocalProcessInfo(in_addr *IpLocalAddr,in_addr *IpRemoteAddr,DWORD *dwCurPid);//获取当前进程TCP连接IP地址
 	VIRTUAL_CHANNEL_ITEM* GetChannel();
 
 private:
 	VIRTUAL_CHANNEL_ITEM* m_Channel;
-	PCHANNEL_ENTRY_POINTS m_pEntryPoints;
+	PCTVPCHANNEL_ENTRY_POINTS m_pEntryPoints;
 	CMyCriticalSection	  m_lckSend;
 protected:
 	ICTEPTransferProtocolClientCallBack*	m_piCallBack;
 };
-

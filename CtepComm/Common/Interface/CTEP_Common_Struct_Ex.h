@@ -1,7 +1,11 @@
 #pragma once
 
+#include <Rpc.h>
+#pragma comment(lib, "Rpcrt4")
+
 #include "Log4Cpp_Lib/Log4CppLib.h"
 #include "CommonInclude/DynamicBuffer.h"
+#include "CommonInclude/Tools/LockedContainer.h"
 
 #include "CTEP_Communicate_TransferLayer_Interface.h"
 #include "CTEP_Communicate_App_Interface.h"
@@ -226,20 +230,81 @@ class CUserDataEx : public CUserData
 	, public CMyCriticalSection
 {
 public:
-	explicit CUserDataEx(CTransferChannelEx* pMain, const GUID& guid = GUID_NULL):pTransChnMain(pMain)
-		, pTransChnTcp(nullptr), pTransChnUdp(nullptr), bClosing(TRUE), guidUser(guid)
+	explicit CUserDataEx() : pTransChnMain(nullptr)
+		, pTransChnTcp(nullptr), pTransChnUdp(nullptr)
 	{
+		pNext = nullptr;
+	}
+
+	void Recycling()
+	{
+		ASSERT(0 == collAppStaticChannel.GetCount());	// User回收的时候要保证其上的所有AppChannel都正确关闭了
+		ASSERT(!pTransChnMain);							// 保证所有连接已经被关闭
+		ASSERT(!pTransChnTcp);
+		ASSERT(!pTransChnUdp);
+
+		Status = User_Invalid;
 		UserId = (USHORT)-1;
-		dwSessionId = (DWORD)-1;
-		ZeroObject(wsUserName);
+	}
+
+	void Initialize(CTransferChannelEx* pMain, const GUID* pGuid = nullptr)
+	{
+		ASSERT(Status == User_Invalid && pNext == nullptr);
+		ASSERT(!pTransChnMain);							// 保证所有连接已经被关闭
+		ASSERT(!pTransChnTcp);
+		ASSERT(!pTransChnUdp);
+
+		pNext = nullptr;
+		pTransChnMain = pTransChnTcp = pTransChnUdp = nullptr;
+		Init();
+
+		if ( pMain)
+		{
+			pTransChnMain = pMain;
+			Status = User_Connected;
+		}
+		else
+		{
+			Status = User_Disconnected;
+		}
+
+		if ( pGuid)
+		{
+			guidUser = *pGuid;
+		}
+		else
+		{
+			UuidCreate(&guidUser);
+		}
+	}
+
+	CAppChannel* FindApp(USHORT AppChannelId)
+	{
+		CAppChannel* pFind = collAppStaticChannel.Lookup(AppChannelId);
+		ASSERT( pFind->Type == StaticChannel);
+		return pFind;
+	}
+
+	BOOL AddApp(CAppChannel* pAppChannel)
+	{
+		USHORT AppId = pAppChannel->AppChannelId;
+		ASSERT(pAppChannel && AppId != (USHORT)-1);
+		return collAppStaticChannel.SetAt(AppId, pAppChannel);
+	}
+
+	CAppChannel* DeleteApp(USHORT AppChannelId)
+	{
+		return collAppStaticChannel.RemoveKey(AppChannelId);
 	}
 
 public:
-	BOOL				 bClosing;
-	GUID				 guidUser;
+	CLockMap<USHORT, CAppChannel> collAppStaticChannel;
+
 	CTransferChannelEx* pTransChnMain;
 	CTransferChannelEx* pTransChnTcp;
 	CTransferChannelEx* pTransChnUdp;
+
+	CUserDataEx *pNext;
 };
 
 class CAppChannelEx : public CAppChannel, public CMyCriticalSection
@@ -261,30 +326,34 @@ public:
 	void Recycling()
 	{
 		LOCK(this);
+
 		bClosing = TRUE;
+		AppChannelId = (USHORT)-1;
 
 		RemoveLink();
 
-		sAppName = nullptr;
-		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
-		pUser = nullptr;
-		ASSERT(pAppParam == nullptr);
-		AppChannelId = (USHORT)-1;
-		piAppProtocol = nullptr;
-		Level = Low;
-		uPacketOption = 0;
-		pTransChannel = nullptr;
-		nCount = 0;
+// 		sAppName = nullptr;
+// 		pStaticAppChannel = pNextDynamicAppChannel = nullptr;
+// 		pUser = nullptr;
+// 		ASSERT(pAppParam == nullptr);
+// 
+// 		AppChannelId = (USHORT)-1;
+// 		piAppProtocol = nullptr;
+// 		Level = Low;
+// 		uPacketOption = 0;
+// 		pTransChannel = nullptr;
+// 		nCount = 0;
 	}
 
 	void Initialize(CUserDataEx *inUserEx, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName,
 		CAppChannelEx *inStaAppChn /*= nullptr*/, EmPacketLevel inlevel /*= Middle*/, USHORT inOption /*= 0*/)
 	{
-		pNext = nullptr;
+		ASSERT(pNext == NULL && inStaAppChn != this && pAppParam == nullptr);
+		Init();
+
 		sAppName = inAppName;
 		pStaticAppChannel = inStaAppChn;
 		pNextDynamicAppChannel = nullptr;
-
 		bClosing = FALSE;
 
 		if ( bufData.buff)
@@ -293,9 +362,7 @@ public:
 		}
 		bufData.Init();
 		pUser = inUserEx;
-		ASSERT(pAppParam == nullptr);
-		pAppParam = nullptr;
-		AppChannelId = (USHORT)-1;
+
 		piAppProtocol = inpiAppProt;
 		Level = inlevel;
 		uPacketOption = inOption;
@@ -316,20 +383,26 @@ public:
 		}
 		else
 		{
+			ASSERT(pUser->Status == User_Disconnected);
 			pTransChannel = nullptr;
-			ASSERT(0);
 		}
 
-		if ( pStaticAppChannel)
+		if ( pStaticAppChannel)	// 当前生成的是一个指定静态通道的附属动态通道
 		{
+#ifdef _DEBUG
+			
+#endif // _DEBUG
+
 			Type = DynamicChannel;
 			nCount = PushLink(pStaticAppChannel);
 		}
-		else
+		else	// 当前生成的是静态通道
 		{
 			Type = StaticChannel;
 			pStaticAppChannel = this;
 			nCount = 1;
+
+			
 		}
 	}
 
@@ -454,6 +527,17 @@ public:
 			pResult->pNextDynamicAppChannel = nullptr;
 		}
 		return pResult;
+	}
+
+	inline BOOL QueryDisconnect()	// 是否可以关闭此通道
+	{
+		ASSERT(pUser && this);
+		if ( dwInterfaceVer >= 1)
+		{
+			return piAppProtocolEx->QueryDisconnect(pUser, this);
+		}
+
+		return TRUE;
 	}
 
 public:

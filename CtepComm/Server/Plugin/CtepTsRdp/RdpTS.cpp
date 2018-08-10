@@ -63,7 +63,7 @@ HRESULT CTransProRdpSvr::CompleteListen(CTransferChannel* pTransChn, ReadWritePa
 		{
 			g_mapSessionData[pListenData->dwSessionId] = pTransChn;
 			pTransChn->hFile = pListenData->hRdpChannel;
-			pTransChn->type = SyncMain;
+			pTransChn->type = TransType_SyncMain;
 			pTransChn->dwSessionId = pListenData->dwSessionId;
 
 			return S_OK;

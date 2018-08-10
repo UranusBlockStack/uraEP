@@ -5,7 +5,7 @@
 
 #pragma comment(lib, "WS2_32.lib")
 
-#define CTEP_DEBUG_SENDPACKET_LEVEL_OFF		0
+#define CTEP_DEBUG_SENDPACKET_LEVEL_OFF		0	//调试模式:关闭发送包等级
 
 Log4CppLib CIOCPServer::m_log("Iocp");
 
@@ -79,7 +79,7 @@ CIOCPServer::CIOCPServer()
 	}
 
 #ifdef _DEBUG
-	m_dwWorkThreadCount = 1;
+	//m_dwWorkThreadCount = 1;	// Debug模式下只使用1个线程执行,便于调试差错
 #endif // _DEBUG
 
 	m_hListenThread = NULL;
@@ -220,21 +220,21 @@ CTransferChannelEx *CIOCPServer::AllocateContext(HANDLE s, ICTEPTransferProtocol
 		pContext->bClosing = FALSE;
 		if ( piTrans == m_TS[0])
 		{
-			pContext->type = EnTransferChannelType::TCP;
+			pContext->type = EnTransferChannelType::TransType_TCP;
 		}
 		else if ( piTrans == m_TS[1])
 		{
-			pContext->type = EnTransferChannelType::UDP;
+			pContext->type = EnTransferChannelType::TransType_UDP;
 		}
 		else
 		{
 			if ( piTrans->SupportIOCP() == CTEP_TS_SUPPORT_IOCP)
 			{
-				pContext->type = EnTransferChannelType::IocpMain;
+				pContext->type = EnTransferChannelType::TransType_IocpMain;
 			}
 			else if ( piTrans->SupportIOCP() == CTEP_TS_SUPPORT_SYNC)
 			{
-				pContext->type = EnTransferChannelType::SyncMain;
+				pContext->type = EnTransferChannelType::TransType_SyncMain;
 			}
 			else
 			{
@@ -282,18 +282,18 @@ void CIOCPServer::FreeContexts()
 }
 
 
-BOOL CIOCPServer::AddAConnection(CTransferChannelEx *pContext)
-{
-	// 向客户连接列表添加一个StTransferChannelEx对象
-	if(m_lstConnection.GetCount() <= (DWORD)m_nMaxConnections)
-	{
-		// 添加到表头
-		m_lstConnection.AddHead(pContext);
-		return TRUE;
-	}
-
-	return FALSE;
-}
+// BOOL CIOCPServer::AddAConnection(CTransferChannelEx *pContext)
+// {
+// 	// 向客户连接列表添加一个StTransferChannelEx对象
+// 	if(m_lstConnection.GetCount() <= (DWORD)m_nMaxConnections)
+// 	{
+// 		// 添加到表头
+// 		m_lstConnection.AddHead(pContext);
+// 		return TRUE;
+// 	}
+// 
+// 	return FALSE;
+// }
 
 void CIOCPServer::CloseAConnection(CTransferChannelEx *pContext)
 {
@@ -306,14 +306,14 @@ void CIOCPServer::CloseAConnection(CTransferChannelEx *pContext)
 		pContext->bClosing = TRUE;
 
 		// 首先从列表中移除要关闭的连接
-		m_lcklstConnection.Lock();
-		POSITION pos = m_lstConnection.Find(pContext);
-		ASSERT(pos);
-		if ( pos)
-		{
-			m_lstConnection.RemoveAt(pos);
-		}
-		m_lcklstConnection.Unlock();
+// 		m_lcklstConnection.Lock();
+// 		POSITION pos = m_lstConnection.Find(pContext);
+// 		ASSERT(pos);
+// 		if ( pos)
+// 		{
+// 			m_lstConnection.RemoveAt(pos);
+// 		}
+// 		m_lcklstConnection.Unlock();
 
 		// 然后关闭客户套节字
 		pContext->DisconnectServer();
@@ -326,29 +326,29 @@ void CIOCPServer::CloseAConnection(CTransferChannelEx *pContext)
 	::LeaveCriticalSection(&pContext->lckSend);
 }
 
-void CIOCPServer::CloseAllConnections()
-{
-	// 遍历整个连接列表，关闭所有的客户套节字
-	CTransferChannelEx *pContext = nullptr;
-	m_lcklstConnection.Lock();
-	if ( m_lstConnection.GetCount()>0)
-	{
-		pContext = m_lstConnection.GetHead();
-	}
-	m_lcklstConnection.Unlock();
-
-	while( pContext)
-	{	
-		CloseAConnection(pContext);
-
-		m_lcklstConnection.Lock();
-		if ( m_lstConnection.GetCount()>0)
-		{
-			pContext = m_lstConnection.GetHead();
-		}
-		m_lcklstConnection.Unlock();
-	}
-}
+// void CIOCPServer::CloseAllConnections()
+// {
+// 	// 遍历整个连接列表，关闭所有的客户套节字
+// 	CTransferChannelEx *pContext = nullptr;
+// 	m_lcklstConnection.Lock();
+// 	if ( m_lstConnection.GetCount()>0)
+// 	{
+// 		pContext = m_lstConnection.GetHead();
+// 	}
+// 	m_lcklstConnection.Unlock();
+// 
+// 	while( pContext)
+// 	{	
+// 		CloseAConnection(pContext);
+// 
+// 		m_lcklstConnection.Lock();
+// 		if ( m_lstConnection.GetCount()>0)
+// 		{
+// 			pContext = m_lstConnection.GetHead();
+// 		}
+// 		m_lcklstConnection.Unlock();
+// 	}
+// }
 
 
 BOOL CIOCPServer::InsertPendingAccept(ReadWritePacket *pBuffer)
@@ -590,11 +590,11 @@ DWORD CIOCPServer::_threadListen()
 
 	m_bShutDown = FALSE;
 
-	// 关闭所有应用
+	// 通知上层关闭所有用户以及链接
 	OnShutdown();
 	
 	// 关闭所有连接
-	CloseAllConnections();
+	//CloseAllConnections();
 
 	// 关闭线程
 	CloseHandle(m_hListenThread);
@@ -685,7 +685,7 @@ DWORD CIOCPServer::_threadSyncWorker()
 		do 
 		{
 			ReadWritePacket* pPacket = AllocateBuffer(pContext, OP_IocpRecv);
-			ASSERT(pPacket && pContext->type == SyncMain);
+			ASSERT(pPacket && pContext->type == TransType_SyncMain);
 
 			HRESULT hr = pContext->piTrans->PostRecv(pContext, pPacket);
 			if ( S_OK == hr
@@ -831,7 +831,7 @@ DWORD CIOCPServer::_threadIocpWorker()
 				nError = WSAGetLastError();
 			}
 		}
-		else if ( pContext && pContext->type != SyncMain)	// 其他Iocp传输
+		else if ( pContext && pContext->type != TransType_SyncMain)	// 其他Iocp传输
 		{
 			bOK = GetOverlappedResult(pContext->hFile, &pBuffer->ol, &dwTrans, FALSE);
 			if ( !bOK)
@@ -839,7 +839,7 @@ DWORD CIOCPServer::_threadIocpWorker()
 				nError = GetLastError();
 			}
 		}
-		else	// 同步传输, RDP/ICA
+		else	// 同步传输RDP/ICA, 以及其他Iocp传输的Listen命令
 		{
 			dwTrans = (DWORD)pBuffer->ol.InternalHigh;
 			nError = (DWORD)pBuffer->ol.Internal;
@@ -885,7 +885,7 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 	EmPacketOperationType ePacketType = pBuffer->opType;
 	if ( pContext)
 	{
-		if ( pContext->type != SyncMain)
+		if ( pContext->type != TransType_SyncMain)
 		{
 			if( ePacketType == EmPacketOperationType::OP_IocpRecv)
 			{
@@ -911,15 +911,10 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 	}
 	else
 	{
-#ifdef _DEBUG
-		ASSERT( pBuffer->opType == OP_Listen && pBuffer->buff.size == 0);
+		ASSERT( pBuffer->opType == OP_Listen &&pBuffer->buff.size == 0);
 		ASSERT( dwTrans == sizeof(CTEPPacket_Init) || dwTrans == 0);
-#endif // _DEBUG
+
 		RemovePendingAccept(pBuffer);// Listen操作, 出等待列表
-#ifdef _DEBUG
-		ASSERT( pBuffer->opType == OP_Listen && pBuffer->buff.size == 0);
-		ASSERT( dwTrans == sizeof(CTEPPacket_Init) || dwTrans == 0);
-#endif // _DEBUG
 	}
 
 	// 检查套节字上发生的错误，如果有的话，通知用户，然后关闭套节字
@@ -947,87 +942,80 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 		return;
 	}
 
-	// 开始处理
-#ifdef _DEBUG
 	ASSERT(dwTrans == 0 || pBuffer->buff.size == 0 || dwTrans == pBuffer->buff.size);
-#endif // _DEBUG
-	
+
+	// 开始处理
 	pBuffer->buff.size = dwTrans;
+
 	if ( pBuffer->opType == EmPacketOperationType::OP_Listen)
 	{
-		ASSERT(pBuffer->hFile != INVALID_HANDLE_VALUE);
-		if( pBuffer->hFile != INVALID_HANDLE_VALUE)
+		CTransferChannelEx *pClient = nullptr;
+		BOOL bSuccess = FALSE;
+
+		do 
 		{
+			ASSERT(pBuffer->hFile != INVALID_HANDLE_VALUE);
+			if( pBuffer->hFile == INVALID_HANDLE_VALUE)
+				break;
+
 			// 为新接受的连接申请客户上下文对象
-			CTransferChannelEx *pClient = AllocateContext(pBuffer->hFile, pBuffer->piTrans);
-			BOOL bSuccess = FALSE;
-			if(pClient)
+			pClient = AllocateContext(pBuffer->hFile, pBuffer->piTrans);
+			if( !pClient)
+				break;
+
+			pClient->piTrans->CompleteListen(pClient, pBuffer);
+			if ( pClient->type == TransType_TCP || pClient->type == TransType_UDP || pClient->type == TransType_IocpMain)
 			{
-				if( AddAConnection(pClient))
+				// 关联新连接到完成端口对象
+				HANDLE hIocp = ::CreateIoCompletionPort(pClient->hFile, m_hCompletion, (DWORD)pClient, 0);
+				if ( hIocp != m_hCompletion)
 				{
-					do 
-					{
-						//SetFileCompletionNotificationModes(pBuffer->hFile, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS|FILE_SKIP_SET_EVENT_ON_HANDLE);
-						pClient->piTrans->CompleteListen(pClient, pBuffer);
-						if ( pClient->type == TCP || pClient->type == UDP || pClient->type == IocpMain)
-						{
-							// 关联新连接到完成端口对象
-							HANDLE hIocp = ::CreateIoCompletionPort(pClient->hFile, m_hCompletion, (DWORD)pClient, 0);
-							if ( hIocp != m_hCompletion)
-							{
-								ASSERT(hIocp == m_hCompletion);
-								break;
-							}
-						}
+					ASSERT(0);
+					break;
+				}
+			}
 
-						// 通知用户
-						pClient->bNeedNotificationClosing = TRUE;
-						OnConnectionEstablished(pClient, pBuffer);
+			// 通知用户
+			pClient->bNeedNotificationClosing = TRUE;
+			OnConnectionEstablished(pClient, pBuffer);
 
-						// 向新连接投递1个Read请求，这些空间在套节字关闭或出错时释放
-						if ( pClient->type == SyncMain)
-						{
-							ASSERT(pClient->hFile != INVALID_HANDLE_VALUE);
-							m_queSyncRead.PushAndSigned(pClient);
-							bSuccess = TRUE;
-						}
-						else
-						{
-							ASSERT(pClient->type == TCP || pClient->type == UDP);
-							ReadWritePacket* pRecv = AllocateBuffer(pClient, OP_IocpRecv);
-							HRESULT hr = pClient->piTrans->PostRecv(pClient, pRecv);
-							if ( pRecv && (hr == S_OK || hr == ERROR_IO_PENDING))
-							{
-								InterlockedIncrement(&m_nIocpOutStandingRecv);
-								bSuccess = TRUE;
-							}
-							else
-							{
-								ASSERT(0);
-							}
-						}
-
-					} while (0);
+			// 向新连接投递1个Read请求，这些空间在套节字关闭或出错时释放
+			if ( pClient->type == TransType_SyncMain)
+			{
+				ASSERT(pClient->hFile != INVALID_HANDLE_VALUE);
+				m_queSyncRead.PushAndSigned(pClient);
+				bSuccess = TRUE;
+			}
+			else
+			{
+				ASSERT(pClient->type == TransType_TCP || pClient->type == TransType_UDP || pClient->type == TransType_IocpMain);
+				ReadWritePacket* pRecv = AllocateBuffer(pClient, OP_IocpRecv);
+				HRESULT hr = pClient->piTrans->PostRecv(pClient, pRecv);
+				if ( pRecv && (hr == S_OK || hr == ERROR_IO_PENDING))
+				{
+					InterlockedIncrement(&m_nIocpOutStandingRecv);
+					bSuccess = TRUE;
 				}
 				else
 				{
 					ASSERT(0);
 				}
-				
-				if ( !bSuccess)
-				{
-					if ( InterlockedExchange((volatile UINT*)&pClient->bNeedNotificationClosing, FALSE))
-					{
-						OnConnectionClosing(pClient, 0);
-					}
-					CloseAConnection(pClient);
-				}
 			}
-			else
+
+		} while (0);
+
+		if ( pClient && !bSuccess)
+		{
+			if ( InterlockedExchange((volatile UINT*)&pClient->bNeedNotificationClosing, FALSE))
 			{
-				// 资源不足，关闭与客户的连接即可
-				pBuffer->piTrans->Disconnect(0, pBuffer);
+				OnConnectionClosing(pClient, 0);
 			}
+			CloseAConnection(pClient);
+		}
+		else if ( !pClient && pBuffer->hFile != INVALID_HANDLE_VALUE)
+		{
+			// 资源不足，关闭与客户的连接即可
+			pBuffer->piTrans->Disconnect(0, pBuffer);
 		}
 
 		// Accept请求完成，释放I/O缓冲区
@@ -1088,13 +1076,13 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 	if ( pContext && !pContext->bClosing && ePacketType == EmPacketOperationType::OP_IocpRecv)
 	{
 		// 继续投递一个新的接收请求
-		if ( pContext->type == SyncMain)
+		if ( pContext->type == TransType_SyncMain)
 		{
 			m_queSyncRead.PushAndSigned(pContext);
 		}
 		else
 		{
-			ASSERT(pContext->type == TCP || pContext->type == UDP);
+			ASSERT(pContext->type == TransType_TCP || pContext->type == TransType_UDP || pContext->type == TransType_IocpMain);
 			ReadWritePacket* pRecv = AllocateBuffer(pContext, OP_IocpRecv);
 			HRESULT hr = pContext->piTrans->PostRecv(pContext, pRecv);
 			if ( pRecv && (hr == S_OK || hr == ERROR_IO_PENDING))
@@ -1179,7 +1167,7 @@ BOOL CIOCPServer::sendMQUEPacket(ReadWritePacket* pSend)
 		return FALSE;
 	}
 
-	if ( pCtxSend->type != SyncMain)
+	if ( pCtxSend->type != TransType_SyncMain)
 	{
 		// 套节字上的未决I/O计数
 		DWORD dwOutstandingSend = InterlockedIncrement(&pCtxSend->nOutstandingSend);
@@ -1192,7 +1180,7 @@ BOOL CIOCPServer::sendMQUEPacket(ReadWritePacket* pSend)
 	hr = pCtxSend->SendPacketServer(pSend);
 	if ( S_OK == hr || hr == ERROR_IO_PENDING)
 	{
-		if ( pCtxSend->type != SyncMain)
+		if ( pCtxSend->type != TransType_SyncMain)
 		{
 			OnWriteCompleted(0, 0);
 		}
@@ -1204,7 +1192,7 @@ BOOL CIOCPServer::sendMQUEPacket(ReadWritePacket* pSend)
 		return TRUE;
 	}
 
-	if ( pCtxSend->type != SyncMain)
+	if ( pCtxSend->type != TransType_SyncMain)
 	{
 		// 套节字上的未决I/O计数
 #if !CTEP_DEBUG_SENDPACKET_LEVEL_OFF

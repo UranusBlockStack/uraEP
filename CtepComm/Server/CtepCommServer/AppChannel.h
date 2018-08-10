@@ -31,9 +31,12 @@ class CCtepCommunicationServer
 {
 	Log4CppLib m_log;
 
-	FastQueue<CAppChannelEx> m_queFreeAppChn;
-	SerialNumColl<CUserDataEx*, USHORT> m_smapUser;
+	FastQueue<CAppChannelEx>			  m_queFreeAppChn;
+	FastQueue<CUserDataEx>				  m_queFreeUserData;
+	
+	SerialNumColl<CUserDataEx*,   USHORT> m_smapUser;
 	SerialNumColl<CAppChannelEx*, USHORT> m_smapAppChn;
+
 
 	in_addr m_LocalIPv4[10];//记录了本地机器的IP地址
 	DWORD	m_nIPv4Count;
@@ -52,8 +55,19 @@ public:
 		pAppChn->Recycling();
 		m_queFreeAppChn.Initialize(pAppChn, TRUE, TRUE, 150);
 
+		CUserDataEx* pUserEx = new CUserDataEx();
+		pUserEx->Recycling();
+		m_queFreeUserData.Initialize(pUserEx, TRUE, TRUE, 20);
+
 		m_nIPv4Count = sizeof(m_LocalIPv4)/sizeof(m_LocalIPv4[0]);
 		AdapterInfomation::RetrieveAdapterIPv4(m_LocalIPv4, m_nIPv4Count);
+	}
+
+public:
+	virtual ULONG GetCurrentConnection()
+	{
+		//LOCK(&m_smapUser);
+		return m_smapUser.GetCount();
 	}
 
 public:
@@ -106,15 +120,17 @@ public:
 	}
 
 //interface ICTEPAppProtocolCallBack
-	virtual CAppChannel* LockChannel(USHORT AppChannelId) override
+	virtual CAppChannel* LockChannel(USHORT AppChannelId, CUserData* pUser/* = nullptr*/) override
 	{
-		LOCK(&m_smapAppChn);
-		CAppChannelEx* pAppChannel = m_smapAppChn.Find(AppChannelId);
+		CAppChannelEx* pAppChannel;
+		pAppChannel = m_smapAppChn.Find(AppChannelId);
 		if ( !pAppChannel)
 			return nullptr;
 
 		CUserDataEx* pUserEx = (CUserDataEx*)pAppChannel->pUser;
-		if ( !pUserEx || pUserEx->bClosing)
+		ASSERT(pAppChannel->pUser == pUser || pUser == nullptr);
+		ASSERT(pAppChannel->pStaticAppChannel == pUserEx->FindApp(pAppChannel->pStaticAppChannel->AppChannelId));
+		if ( !pUserEx || pUserEx->Status == User_Invalid)
 			return nullptr;
 
 		pAppChannel->Lock();
@@ -153,9 +169,9 @@ public:
 	{
 		ReleaseBuffer(p);
 	}
-	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size) override
+	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size, CUserData* pUser/* = nullptr*/) override
 	{
-		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		CAppChannel* pAppChannel = LockChannel(AppChannelId, pUser);
 		if ( pAppChannel)
 		{
 			HRESULT hr = WritePacket(pAppChannel, buff, size);
@@ -174,9 +190,9 @@ public:
 	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pStaticChannel
 		 , EmPacketLevel level = Middle, USHORT option = NULL) override;// CAppChannel::uPacketOption option
 	virtual void	CloseDynamicChannel(CAppChannel* pDynamicChannel) override;
-	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId) override
+	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId, CUserData* pUser/* = nullptr*/) override
 	{
-		CAppChannel* pAppChannel = LockChannel(AppChannelId);
+		CAppChannel* pAppChannel = LockChannel(AppChannelId, pUser);
 		if ( pAppChannel)
 		{
 			CloseDynamicChannel(pAppChannel);
@@ -187,6 +203,56 @@ public:
 	}
 
 private://internal function
+	CUserDataEx* findUser(DWORD dwSessionId)
+	{
+		if ( dwSessionId == (DWORD)-1/* && (!UserName || !UserName[0])*/)
+		{
+			ASSERT(0);
+			return nullptr;
+		}
+
+		CUserDataEx* pFind = nullptr;
+		LOCK(&m_smapUser);
+		POSITION pos = m_smapUser.GetStartPosition();
+		while (pos)
+		{
+			CUserDataEx* pGet = m_smapUser.GetNextValue(pos);
+			if ( dwSessionId == pGet->dwSessionId)
+			{
+				pFind = pGet;
+				break;
+			}
+		}
+
+		return pFind;
+	}
+	CUserDataEx* findUser(WCHAR UserName[260])
+	{
+		if ( !UserName || !UserName[0])
+		{
+			ASSERT(0);
+			return nullptr;
+		}
+
+		CUserDataEx* pFind = nullptr;
+		LOCK(&m_smapUser);
+		POSITION pos = m_smapUser.GetStartPosition();
+		while (pos)
+		{
+			CUserDataEx* pGet = m_smapUser.GetNextValue(pos);
+			if ( pGet->dwSessionId != (DWORD)-1)
+				continue;
+
+			if ( !_wcsicmp(pGet->wsUserName, UserName))
+			{
+				pFind = pGet;
+				break;
+			}
+		}
+
+		return pFind;
+	}
+
 	void	closeStaticChannel(CAppChannel* pStaticChannel);
 
 	inline void closeAppChannel(CAppChannel* pAppChannel);			// close static channel.

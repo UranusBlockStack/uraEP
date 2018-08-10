@@ -54,17 +54,12 @@ public:
 
 	// 关闭一个连接和关闭所有连接
 	void CloseAConnection(CTransferChannelEx *pContext);
-	void CloseAllConnections();
+	//void CloseAllConnections();
 
 	// 取得当前的连接数量
-	ULONG GetCurrentConnection()
-	{
-		//LOCK(&m_lcklstConnection);
-		return (ULONG)m_lstConnection.GetCount();
-	}
+	virtual ULONG GetCurrentConnection() = 0;	// { return (ULONG)m_lstConnection.GetCount();}
 
-	// 向指定客户发送文本
-	BOOL SendText(CTransferChannelEx *pContext, char *pszText, int nLen, EmPacketLevel level = Middle);
+	// 向指定连接发送数据
 	BOOL SendPacket(CTransferChannelEx *pContext, ReadWritePacket* pBuffer, EmPacketLevel level/* = Middle*/);
 
 protected:
@@ -81,7 +76,7 @@ protected:
 	void FreeContexts();
 
 	// 向连接列表中添加一个连接
-	BOOL AddAConnection(CTransferChannelEx *pContext);
+	//BOOL AddAConnection(CTransferChannelEx *pContext);
 
 	// 插入和移除未决的接受请求
 	BOOL InsertPendingAccept(ReadWritePacket *pBuffer);
@@ -122,8 +117,8 @@ protected:
 	FastQueue<ReadWritePacket> m_quePendingAccepts;   // 抛出请求列表。
 
 	// 记录已经建立的连接列表
-	CAtlList<CTransferChannelEx*> m_lstConnection;
-	CMyCriticalSection           m_lcklstConnection;
+	//CAtlList<CTransferChannelEx*> m_lstConnection;
+	//CMyCriticalSection           m_lcklstConnection;
 
 	// 记录等待执行同步读取操作的列表
 	MISOQueue<CTransferChannelEx> m_queSyncRead;

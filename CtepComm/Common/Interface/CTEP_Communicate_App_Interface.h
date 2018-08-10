@@ -13,21 +13,27 @@ enum EnAppChannelType
 {
 	StaticChannel = 0,
 	DynamicChannel = 1,
+	CrossDyncChannel = 2,
 };
 
 class __declspec(novtable) CAppChannel		// 一条应用通道, 表示一个应用对一个用户的服务
 {
 public:
-	inline LPCWSTR debugType()
+	void Init()
 	{
-		switch(Type)
-		{
-		case StaticChannel:
-			return L"StaticChannel";
-		case DynamicChannel:
-			return L"DynamicChannel";
-		}
-		return L"EnAppChannelType:??????";
+		bClosing = TRUE;
+
+		pAppParam = NULL;
+		Type = (EnAppChannelType)-1;
+		AppChannelId = (USHORT)-1;
+		dwInterfaceVer = (DWORD)-1;
+		piAppProtocol = nullptr;
+		pUser = nullptr;
+
+		uPacketOption = 0;
+		Level = Low;
+		nCount = 0;
+		sAppName = nullptr;
 	}
 
 public:
@@ -37,7 +43,13 @@ public:
 	READONLY_DATA EnAppChannelType	Type;			//通道类型,静态通道或者动态通道
 
 	READONLY_DATA USHORT			AppChannelId;
-	READONLY_DATA ICTEPAppProtocol* piAppProtocol;	// 通道对应的服务接口
+	READONLY_DATA DWORD				dwInterfaceVer;
+	union
+	{
+		READONLY_DATA ICTEPAppProtocol* piAppProtocol;		// 通道对应的服务接口
+		READONLY_DATA ICTEPAppProtocolEx* piAppProtocolEx;	// 通道对应的服务接口, 当dwInterfaceVer = 1时有效
+	};
+	
 	READONLY_DATA CUserData			*pUser;			// 通道对应的用户
 
 #define Packet_Can_Lost				0x0001
@@ -48,20 +60,37 @@ public:
 	READONLY_DATA ULONG volatile	nCount;	// App Dynamic Channel Count
 
 	READONLY_DATA LPCSTR			sAppName;	// 应用名称
+
+public:
+#ifdef _DEBUG
+	inline LPCWSTR debugType()
+	{
+		switch(Type)
+		{
+		case StaticChannel:
+			return L"StaticChannel";
+		case DynamicChannel:
+			return L"DynamicChannel";
+		case CrossDyncChannel:
+			return L"CrossDyncChannel";
+		}
+		return L"EnAppChannelType:??????";
+	}
+#endif // _DEBUG
 };
 
 interface ICTEPAppProtocolCallBack
 {
-	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size) = 0;
+	virtual HRESULT WritePacket(USHORT AppChannelId, char* buff, ULONG size, CUserData* pUser/* = nullptr*/) = 0;
 	virtual HRESULT WritePacket(CAppChannel *, char* buff, ULONG size) = 0;
 	virtual HRESULT WritePacket(CAppChannel *, ReadWritePacket *) = 0;
 
 	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pStaticChannel
 		 , EmPacketLevel Level = Middle, USHORT dwType = NULL) = 0;
 	virtual void	CloseDynamicChannel(CAppChannel* pDynamicChannel) = 0;
-	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId) = 0;
+	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId, CUserData* pUser/* = nullptr*/) = 0;
 
-	virtual CAppChannel* LockChannel(USHORT AppChannelId) = 0;
+	virtual CAppChannel* LockChannel(USHORT AppChannelId, CUserData* pUser/* = nullptr*/) = 0;
 	virtual void UnlockChannel(CAppChannel* pAppChannel) = 0;
 
 	virtual ReadWritePacket*	MallocSendPacket(CAppChannel *pAppChn, USHORT size) = 0;// size > 0 && size < CTEP_DEFAULT_BUFFER_DATA_SIZE
@@ -75,19 +104,27 @@ interface ICTEPAppProtocolCallBack
 interface ICTEPAppProtocol
 {
 	virtual LPCSTR   GetName() = 0;	// AppName character count <= 15, 
+	virtual DWORD    GetInterfaceVersion() = 0; //默认返回0, ICTEPAppProtocolEx接口返回1,
+
 #define CTEP_TYPE_APP_SERVER	0x1
 #define CTEP_TYPE_APP_CLIENT	0
 	virtual HRESULT  Initialize(ICTEPAppProtocolCallBack* pI, DWORD dwType) = 0;
 	virtual void	 Final() = 0;	// server close.
 
-	virtual HRESULT  Connect(CUserData* pUser, CAppChannel* pNewAppChannel, CAppChannel *pStaticAppChannel/* = nullptr*/) = 0;
+	virtual HRESULT  Connect(CUserData* pUser, CAppChannel* pNewAppChannel, CAppChannel *pStaticAppChannel/* = nullptr*/) = 0;	// 一个被动态通道
 	virtual HRESULT  ReadPacket(CUserData* pUser, CAppChannel *pAppChannel, char* pBuff, ULONG size) = 0;
-	virtual void	 Disconnect(CUserData* pUser, CAppChannel *pAppChannel) = 0;
-
-	virtual DWORD    GetNameCount() = 0;// 支持的App数量,默认为1, Proxy应用有可能会代理多个App.
-	virtual LPCSTR   GetNameIndex(long iIndex = 0) = 0;	// AppName character count <= 15, 用于Proxy支持多个App的代理使用
+	virtual void	 Disconnect(CUserData* pUser, CAppChannel *pAppChannel) = 0;													// 一个动态通道被
 };
 
+interface ICTEPAppProtocolEx : public ICTEPAppProtocol
+{
+	virtual DWORD    GetNameCount() = 0;// 支持的App数量,默认为1, Proxy应用有可能会代理多个App.
+	virtual LPCSTR   GetNameIndex(long iIndex = 0) = 0;	// AppName character count <= 15, 用于Proxy支持多个App的代理使用
+
+	virtual BOOL     QueryDisconnect(CUserData* pUser, CAppChannel *pAppChannel) = 0;	//Comm模块询问App模块指定静态通道是否可以被关闭了,可以返回TRUE,拒绝关闭返回FALSE
+
+	virtual void     ChannelStateChanged(CUserData* pUser, CAppChannel *pAppChannel);	//Comm模块通知App模块指定通道的状态发生改变(Connected, Disconnected)
+};
 
 // 
 // 用户跨进程的CTEP App通讯使用的接口.
@@ -100,7 +137,7 @@ enum EmCtepAppProxyTargetChannel
 	RemoteAppChannel,		//发往 or 接收 另一侧(server2client, client2server)的通道数据
 };
 
-interface ICTEPAppProtocolStubCallBack
+interface ICTEPAppProtocolCrossCallBack
 {
 	virtual HRESULT Connect(LPCSTR sAppName, CUserData* pUser, EnAppChannelType type) = 0;//创建一个当前用户当前应用的通道(动态或者静态)
 	virtual HRESULT Disconnect();

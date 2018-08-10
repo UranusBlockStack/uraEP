@@ -7,8 +7,9 @@
 #include "CommonInclude/MainImpl.h"
 #include "CommonInclude/Tools/MoudlesAndPath.h"
 
-#include "CommonInclude/Tools/FirewallConfig.h"
-#include "CommonInclude/Tools/FirewallConfig.cpp"
+// #include "CommonInclude/Tools/FirewallConfig.h"
+// #include "CommonInclude/Tools/FirewallConfig.cpp"
+#include "CommonInclude/Tools/WindowsFirewallException.h"
 
 BOOL WINAPI HandlerRoutine(__in  DWORD dwCtrlType);
 
@@ -56,7 +57,12 @@ public:
 			GetSelfDir(path);
 
 			// Ìí¼Ó·À»ðÇ½
-			CFireWallAdd::FireWallWindows_Add(path, L"CTEP Foundation Architecture");
+			CWindowsFirewallExcept wfe;
+			if ( SUCCEEDED(wfe.Initialize()))
+			{
+				wfe.AddApp(L"CTEP Foundation Architecture");
+				wfe.Cleanup();
+			}
 		}
 
 		return hr;

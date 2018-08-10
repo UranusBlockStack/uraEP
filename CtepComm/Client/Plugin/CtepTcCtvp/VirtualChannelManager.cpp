@@ -1,45 +1,42 @@
 #include "StdAfx.h"
 #include "VirtualChannelManager.h"
 
-extern VOID VCAPITYPE VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOID pData, UINT dataLength);
-extern void WINAPI VirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, UINT32 dataLength, UINT32 totalLength, UINT32 dataFlags);
+extern VOID VCAPITYPE CTVPVirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOID pData, UINT dataLength);
+extern void WINAPI CTVPVirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, UINT32 dataLength, UINT32 totalLength, UINT32 dataFlags);
 
-CVirtualChannelManager::CVirtualChannelManager(PCHANNEL_ENTRY_POINTS pEntryPoints):m_Channel(nullptr)
+CCTVPVirtualChannelManager::CCTVPVirtualChannelManager(PCTVPCHANNEL_ENTRY_POINTS pEntryPoints):m_Channel(nullptr)
 	, m_piCallBack(nullptr)
 {
-	m_pEntryPoints = (PCHANNEL_ENTRY_POINTS)LocalAlloc(LPTR, pEntryPoints->cbSize);
+	m_pEntryPoints = (PCTVPCHANNEL_ENTRY_POINTS)LocalAlloc(LPTR, pEntryPoints->cbSize);
 	ASSERT(m_pEntryPoints);
 	memcpy(m_pEntryPoints, pEntryPoints, pEntryPoints->cbSize);
-	
+
 	InitChannel();
 }
-CVirtualChannelManager::~CVirtualChannelManager()
+CCTVPVirtualChannelManager::~CCTVPVirtualChannelManager()
 {
 	LocalFree(m_pEntryPoints);
 }
 
-CVirtualChannelManager::VIRTUAL_CHANNEL_ITEM* CVirtualChannelManager::GetChannel()
+CCTVPVirtualChannelManager::VIRTUAL_CHANNEL_ITEM* CCTVPVirtualChannelManager::GetChannel()
 {
 	return m_Channel;
 }
 
-HANDLE CVirtualChannelManager::InitChannel(const char* pChannelName)
+HANDLE CCTVPVirtualChannelManager::InitChannel(const char* pChannelName)
 {
 	DWORD dwChannelNum = 0;
-	CHANNEL_DEF cd = {0};
+	CTVPCHANNEL_DEF cd = {0};
 	UINT        uRet;
 	LPHANDLE    phChannel;
 
 	ASSERT(!m_Channel);
 	strcpy_s(cd.name, pChannelName);
 	uRet = m_pEntryPoints->pVirtualChannelInit((LPVOID *)&phChannel,
-		(PCHANNEL_DEF)&cd, 1,
+		(PCTVPCHANNEL_DEF)&cd, 1,
 		VIRTUAL_CHANNEL_VERSION_WIN2000,
-		(PCHANNEL_INIT_EVENT_FN)VirtualChannelInitEventProc);
+		(PCTVPCHANNEL_INIT_EVENT_FN)CTVPVirtualChannelInitEventProc);
 	if (uRet != CHANNEL_RC_OK)
-		goto err_exit;
-
-	if (cd.options != CHANNEL_OPTION_INITIALIZED)
 		goto err_exit;
 	m_Channel = (VIRTUAL_CHANNEL_ITEM*)malloc(sizeof(VIRTUAL_CHANNEL_ITEM));
 	ZeroMemory(m_Channel, sizeof(VIRTUAL_CHANNEL_ITEM));
@@ -53,16 +50,16 @@ err_exit:
 	return NULL;
 }
 
-void CVirtualChannelManager::OpenChannelByInitHandle( LPVOID pInitHandle)
+void CCTVPVirtualChannelManager::OpenChannelByInitHandle( LPVOID pInitHandle)
 {
 	UINT ui;
-
+	m_Channel->m_phChannel = (LPHANDLE)pInitHandle;
 	if ( m_Channel && m_Channel->m_phChannel == pInitHandle)
 	{
 		ui = m_pEntryPoints->pVirtualChannelOpen(m_Channel->m_phChannel,
 			&m_Channel->m_dwChannelNum,
 			m_Channel->m_szChannelName,
-			(PCHANNEL_OPEN_EVENT_FN)VirtualChannelOpenEvent);
+			(PCTVPCHANNEL_OPEN_EVENT_FN)CTVPVirtualChannelOpenEvent);
 
 		if (ui == CHANNEL_RC_OK)
 		{
@@ -78,7 +75,7 @@ void CVirtualChannelManager::OpenChannelByInitHandle( LPVOID pInitHandle)
 }
 
 //同步发送数据
-BOOL CVirtualChannelManager::WriteDataToChannel(ReadWritePacket* pPacket)
+BOOL CCTVPVirtualChannelManager::WriteDataToChannel(ReadWritePacket* pPacket)
 {
 	ASSERT(m_Channel && pPacket);
 	if ( !m_Channel || !pPacket)
@@ -86,7 +83,7 @@ BOOL CVirtualChannelManager::WriteDataToChannel(ReadWritePacket* pPacket)
 	m_lckSend.Lock();
 	UINT ui = m_pEntryPoints->pVirtualChannelWrite(m_Channel->m_dwChannelNum, pPacket->buff.buff
 		, pPacket->buff.size, pPacket);
-
+	ASSERT(ui == CHANNEL_RC_OK);
 #ifdef _DEBUG
 	CTEPPacket_Header* pHead = (CTEPPacket_Header*)pPacket->buff.buff;
 	ASSERT(pHead->magic == 'E');
@@ -97,11 +94,11 @@ BOOL CVirtualChannelManager::WriteDataToChannel(ReadWritePacket* pPacket)
 #endif // _DEBUG
 
 	m_lckSend.Unlock();
-	
+
 	return ui == CHANNEL_RC_OK;
 }
 
-void CVirtualChannelManager::CloseChannelByInitHandle(LPVOID pInitHandle)
+void CCTVPVirtualChannelManager::CloseChannelByInitHandle(LPVOID pInitHandle)
 {
 	ASSERT(m_Channel->m_phChannel == pInitHandle);
 	if( m_Channel->m_phChannel == pInitHandle)

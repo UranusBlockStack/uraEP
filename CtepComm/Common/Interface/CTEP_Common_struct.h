@@ -19,40 +19,46 @@
 class  CUserData;
 class  CAppChannel;
 class  CTransferChannel;
+
 struct ReadWritePacket;
 
 interface ICTEPTransferProtocolCallBack;
 interface ICTEPTransferProtocolServer;
 interface ICTEPTransferProtocolClient;
 
+typedef ICTEPTransferProtocolCallBack *ICTEPTransferProtocolCallBackPtr;
+typedef ICTEPTransferProtocolServer *ICTEPTransferProtocolServerPtr;
+typedef ICTEPTransferProtocolClient *ICTEPTransferProtocolClientPtr;
+
 interface ICTEPAppProtocolCallBack;
 interface ICTEPAppProtocol;
+interface ICTEPAppProtocolEx;
 
-interface ICTEPAppProtocolStubCallBack;
+interface ICTEPAppProtocolCrossCallBack;
 
 //	以下函数为Ctep服务器端传输层Dll的导出函数,用于与CtepCommServer对接使用,以提供对特定底层协议的连接支持(如RDP/SPICE等).
 //Dll的名称必须以名称: "CtepTs" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceTransServer	"CTEPGetInterfaceTransServer"
-typedef ICTEPTransferProtocolServer* (WINAPI *Fn_CTEPGetInterfaceTransServer)();
-ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer();
+typedef ICTEPTransferProtocolServer* WINAPI T_CTEPGetInterfaceTransServer();
+typedef T_CTEPGetInterfaceTransServer * Fn_CTEPGetInterfaceTransServer;
 
 //	以下函数为Ctep客户端传输层Dll的导出函数,用于与CtepCommClient对接使用,以提供对特定底层协议的连接支持(如RDP/SPICE等).
 //Dll的名称必须以名称: "CtepTc" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceTransClient	"CTEPGetInterfaceTransClient"
-typedef ICTEPTransferProtocolClient* (WINAPI *Fn_CTEPGetInterfaceTransClient)();
-ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClient();
+typedef ICTEPTransferProtocolClient* WINAPI T_CTEPGetInterfaceTransClient();
+typedef T_CTEPGetInterfaceTransClient *Fn_CTEPGetInterfaceTransClient;
 
 //	以下函数为Ctep服务器端应用层Dll的导出函数,用于与CtepCommServer对接使用,以实现一个基于CTEP的服务器端应用程序(如CTMMR/USBREDIR).
 //Dll的名称必须以名称: "CtepAs" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceAppServer		"CTEPGetInterfaceAppServer"
-typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppServer)();
-ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppServer();
+typedef ICTEPAppProtocol* WINAPI T_CTEPGetInterfaceAppServer();
+typedef T_CTEPGetInterfaceAppServer *Fn_CTEPGetInterfaceAppServer;
 
 //	以下函数为Ctep客户端应用层Dll的导出函数,用于与CtepCommClient对接使用,以实现一个基于CTEP的客户端应用程序(如CTMMR/USBREDIR).
 //Dll的名称必须以名称: "CtepAc" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceAppClient		"CTEPGetInterfaceAppClient"
-typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppClient)();
-ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppClient();
+typedef ICTEPAppProtocol* WINAPI T_CTEPGetInterfaceAppClient();
+typedef T_CTEPGetInterfaceAppClient *Fn_CTEPGetInterfaceAppClient;
 
 // 
 // 一下用于跨进程的服务器端CTEP代理/存根代码通信
@@ -61,13 +67,15 @@ ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppClient();
 //	以下函数为Ctep服务器端应用层DLL的导出函数,用于与CtepAppProxy对接使用,以实现一个基于CTEP的服务器端应用程序(如CTMMR/USBREDIR).
 //Dll的名称必须以名称: "CtepAPxs" 开头,并且以dll为后缀名
 #define FUNC_CTEPGetInterfaceAppProxyServer		"CTEPGetInterfaceAppProxyServer"
-typedef ICTEPAppProtocol* (WINAPI *Fn_CTEPGetInterfaceAppProxyServer)();
-ICTEPAppProtocol* WINAPI CTEPGetInterfaceAppProxyServer();
+typedef ICTEPAppProtocol* WINAPI T_CTEPGetInterfaceAppProxyServer();
+typedef T_CTEPGetInterfaceAppProxyServer *Fn_CTEPGetInterfaceAppProxyServer;
+
 
 //	以下函数用于导出跨进程使用的Ctep应用层App使用接口.
 #define FUNC_CTEPGetInterfaceAppStubCallBack	"CTEPGetInterfaceAppStubCallBack"
-typedef ICTEPAppProtocolStubCallBack* (WINAPI *Fn_CTEPGetInterfaceAppStubCallBack)();
-ICTEPAppProtocolStubCallBack* WINAPI CTEPGetInterfaceAppStubCallBack();
+typedef ICTEPAppProtocolCrossCallBack* WINAPI T_CTEPGetInterfaceAppCrossCallBack();
+typedef T_CTEPGetInterfaceAppCrossCallBack *Fn_CTEPGetInterfaceAppStubCallBack;
+
 
 
 
@@ -77,17 +85,44 @@ ICTEPAppProtocolStubCallBack* WINAPI CTEPGetInterfaceAppStubCallBack();
 // 
 
 // 描述一个指定用户的用户特性数据
+enum EmUserType
+{
+	User_Normal = 0,		// 普通用户类型,用户生命周期由底层链路与上层应用链接共同决定
+	User_WinSession = 1,	// windows Session用户类型,生命周期与windows会话保持一致
+};
+enum EmUserStatus
+{
+	User_Invalid = -1,		// 当前User处于无效状态,或者已经被回收释放
+	User_Disconnected = 0,	// 当前User处于离线状态,用户没有与服务器端建立连接
+	User_Connected = 1,		// 当前User已经与用户建立了连接
+};
 class ATL_NO_VTABLE CUserData
 {
 public:
-	CUserData() : UserId((USHORT)-1), dwSessionId((DWORD)-1)
+	CUserData()
 	{
-		wsUserName[0] = NULL;
+		Init();
 	}
 
-	USHORT UserId;				// -1表示无效
-	DWORD dwSessionId;			// -1表示无效
-	WCHAR wsUserName[260];		// \0表示无效
+	void Init()
+	{
+		wsUserName[0] = NULL;
+
+		UserId		= ((USHORT)-1);
+		dwSessionId	= ((DWORD)-1);
+		Type		= (User_Normal);
+		Status		= User_Invalid;
+
+		guidUser	= GUID_NULL;
+	}
+
+	USHORT			UserId;					// -1表示无效
+	DWORD			dwSessionId;			// -1表示无效
+	WCHAR			wsUserName[260];		// \0表示无效
+
+	GUID			guidUser;
+	EmUserType		Type;
+	EmUserStatus	Status;
 };
 
 // 描述一个包操作类型

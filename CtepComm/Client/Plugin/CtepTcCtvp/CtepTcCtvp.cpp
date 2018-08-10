@@ -1,57 +1,46 @@
+// CTEPTStestTcp.cpp : 定义 DLL 应用程序的导出函数。
+//
+
 #include "stdafx.h"
-#include "RdpTransferClient.h"
+#include "CtepTcCtvp.h"
 
 #include "CommonInclude/Tools/AdapterInformation.h"
 
-CRdpTransferClient::CRdpTransferClient(PCHANNEL_ENTRY_POINTS pEntryPoints)
-	: CVirtualChannelManager(pEntryPoints), m_pTransChn(nullptr)
-	, m_log("TS_RDP")
+CTVPTransferClient::CTVPTransferClient(PCTVPCHANNEL_ENTRY_POINTS pEntryPoints)
+	: CCTVPVirtualChannelManager(pEntryPoints), m_pTransChn(nullptr)
+	, m_log("TS_CTVP")
 {
 #ifdef _DEBUG
 	m_log.Message(0xA, L"Debug");
 #endif // _DEBUG
 	InitializeCriticalSection(&cs);
 }
-CRdpTransferClient::~CRdpTransferClient()
+CTVPTransferClient::~CTVPTransferClient()
 {
 	DeleteCriticalSection(&cs);
 }
-LPCSTR CRdpTransferClient::GetName()	// 返回传输协议名称
+LPCSTR CTVPTransferClient::GetName()	// 返回传输协议名称
 {
-	return "RDP";
+	return "CTVP";
 }
-HRESULT CRdpTransferClient::Initialize(ICTEPTransferProtocolClientCallBack* pI)
+HRESULT CTVPTransferClient::Initialize(ICTEPTransferProtocolClientCallBack* pI)
 {
 	ASSERT(!m_piCallBack || m_piCallBack == pI);
 	ASSERT(pI);
 	m_piCallBack = pI;
 	return S_OK;
 }
-void CRdpTransferClient::Final()
+void CTVPTransferClient::Final()
 {
 
 }
-HRESULT CRdpTransferClient::Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket /*= 0*/)
+HRESULT CTVPTransferClient::Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket /*= 0*/)
 {
 	HRESULT hr = S_OK;
-
 	ASSERT(m_pTransChn == nullptr);
-	in_addr in_AddrLocal = {0}, in_AddRemote = {0};
-	AdapterInfomation::GetTCPLocalProcessInfo(&in_AddrLocal, &in_AddRemote, 1);
-
-	pTransChn->addrLocal.sin_family = AF_INET;
-	pTransChn->addrLocal.sin_addr = in_AddrLocal;
-	pTransChn->addrLocal.sin_port = 0;
-
-	pTransChn->addrRemote.sin_family = AF_INET;
-	pTransChn->addrRemote.sin_addr = in_AddRemote;
-	pTransChn->addrRemote.sin_port = 0;
 
 	pTransChn->hFile = *(GetChannel()->m_phChannel);
-
 	m_pTransChn = pTransChn;
-
-	m_piCallBack->Connected(pTransChn);
 
 	if ( pPacket)
 	{
@@ -60,7 +49,7 @@ HRESULT CRdpTransferClient::Connect(CTransferChannel* pTransChn, ReadWritePacket
 
 	return hr;
 }
-HRESULT CRdpTransferClient::Disconnect(CTransferChannel* pTransChn)
+HRESULT CTVPTransferClient::Disconnect(CTransferChannel* pTransChn)
 {
 	if ( pTransChn && pTransChn->hFile != INVALID_HANDLE_VALUE)
 	{
@@ -74,7 +63,7 @@ HRESULT CRdpTransferClient::Disconnect(CTransferChannel* pTransChn)
 }
 
 //同步发送数据
-HRESULT CRdpTransferClient::Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTVPTransferClient::Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	int ret = WriteDataToChannel(pPacket);
 
@@ -86,12 +75,12 @@ HRESULT CRdpTransferClient::Send(CTransferChannel* pTransChn, ReadWritePacket* p
 	return ERROR_IO_PENDING;
 }
 
-HRESULT CRdpTransferClient::Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
+HRESULT CTVPTransferClient::Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket)
 {
 	return E_NOTIMPL;
 }
 
-void CRdpTransferClient::RecvData(char *pbuff, DWORD size)
+void CTVPTransferClient::RecvData(char *pbuff, DWORD size)
 {
 	ASSERT(m_piCallBack);
 	static ReadWritePacket* pPacket = m_piCallBack->AllocatePacket(this);
@@ -104,18 +93,18 @@ void CRdpTransferClient::RecvData(char *pbuff, DWORD size)
 }
 
 #include "CommonInclude/Tools/MoudlesAndPath.h"
-CRdpTransferClient *g_pRdpTransClient = nullptr;
+CTVPTransferClient *g_pCtvpTransClient = nullptr;
 HMODULE g_hModule;
 FnCTEPCommClientInitalize g_fnInit;
 FnCTEPCommClientClose	  g_fnClose;
 
-//RDP通道的默认入口函数
-BOOL VCAPITYPE VirtualChannelEntry(PCHANNEL_ENTRY_POINTS pEntryPoints)
+//CTVP通道的默认入口函数
+BOOL VCAPITYPE VirtualChannelEntry(PCTVPCHANNEL_ENTRY_POINTS pEntryPoints)
 {
+	Sleep(8000);
 	OutputDebugString(TEXT("SYSINF_C: VirtualChannelEntry\n"));
-	g_pRdpTransClient = new CRdpTransferClient(pEntryPoints);
-	ASSERT(g_pRdpTransClient);
-
+	g_pCtvpTransClient = new CTVPTransferClient(pEntryPoints);
+	ASSERT(g_pCtvpTransClient);
 	WCHAR Path[MAX_PATH+1];
 	GetSelfDir(Path);
 	wcscat_s(Path, L"CtepCommClient.dll");
@@ -132,19 +121,19 @@ BOOL VCAPITYPE VirtualChannelEntry(PCHANNEL_ENTRY_POINTS pEntryPoints)
 			return TRUE;
 		}
 	}
-	delete g_pRdpTransClient;
-	g_pRdpTransClient = nullptr;
+	delete g_pCtvpTransClient;
+	g_pCtvpTransClient = nullptr;
 
 	return FALSE;
 }
 
-VOID __stdcall VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOID pData, UINT dataLength)
+VOID __stdcall CTVPVirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOID pData, UINT dataLength)
 {
 
 	UNREFERENCED_PARAMETER(pInitHandle);
 	UNREFERENCED_PARAMETER(dataLength);
 
-	OutputDebugString(TEXT("VirtualChannelInitEventProc ------------ \n"));
+	OutputDebugString(TEXT("CTVPVirtualChannelInitEventProc ------------ \n"));
 	switch(event)
 	{
 	case CHANNEL_EVENT_INITIALIZED:
@@ -157,12 +146,12 @@ VOID __stdcall VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOI
 		{
 			OutputDebugString(TEXT("CHANNEL_EVENT_CONNECTED ------------ \r\n"));
 
-			//1.当通道初始化以后，获取已经连接的RDP远程桌面的IP地址
+			//1.当通道初始化以后，获取已经连接的CTVP远程桌面的IP地址
 			//2.通过管道给通信层发送一个消息，或者启动通信层
-			g_pRdpTransClient->OpenChannelByInitHandle(pInitHandle);
+			g_pCtvpTransClient->OpenChannelByInitHandle(pInitHandle);
 			if ( g_fnInit)
 			{
-				g_fnInit(g_pRdpTransClient, 0, 0);
+				g_fnInit(g_pCtvpTransClient, 0, 0);
 			}
 		}
 		break;
@@ -178,7 +167,7 @@ VOID __stdcall VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOI
 			OutputDebugString(TEXT("CHANNEL_EVENT_DISCONNECTED ------------ \r\n"));
 
 			//通过管道给通信层发送一个消息，或者关闭通信层
-			g_pRdpTransClient->CloseChannelByInitHandle(pInitHandle);
+			g_pCtvpTransClient->CloseChannelByInitHandle(pInitHandle);
 
 			if ( g_fnClose)
 			{
@@ -190,7 +179,7 @@ VOID __stdcall VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOI
 	case CHANNEL_EVENT_TERMINATED:
 		{
 			OutputDebugString(TEXT("CHANNEL_EVENT_TERMINATED ------------ \r\n"));
-			g_pRdpTransClient->CloseChannelByInitHandle(pInitHandle);
+			g_pCtvpTransClient->CloseChannelByInitHandle(pInitHandle);
 			if ( g_fnClose)
 			{
 				g_fnClose();
@@ -207,7 +196,7 @@ VOID __stdcall VirtualChannelInitEventProc(LPVOID pInitHandle, UINT event, LPVOI
 	}
 }
 
-void WINAPI VirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, UINT32 dataLength, UINT32 totalLength, UINT32 dataFlags)
+void WINAPI CTVPVirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, UINT32 dataLength, UINT32 totalLength, UINT32 dataFlags)
 {
 	LPDWORD pdwControlCode = (LPDWORD)pdata;
 
@@ -217,30 +206,30 @@ void WINAPI VirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, 
 
 	switch(event)
 	{
-	case CHANNEL_EVENT_DATA_RECEIVED:
+	case CHANNEL_EVENT_READ_COMPLETE:
 		{
-			ASSERT( g_pRdpTransClient);
-			if ( g_pRdpTransClient)
+			ASSERT( g_pCtvpTransClient);
+			if ( g_pCtvpTransClient)
 			{
-				g_pRdpTransClient->RecvData((char*)pdata, dataLength);
+				g_pCtvpTransClient->RecvData((char*)pdata, dataLength);
 			}
 		}
 		break;
 
 	case CHANNEL_EVENT_WRITE_COMPLETE:
 		{
-			if (g_pRdpTransClient)
+			if (g_pCtvpTransClient)
 			{
-				g_pRdpTransClient->ChannelWriteComplete((ReadWritePacket*)pdata);
+				g_pCtvpTransClient->ChannelWriteComplete((ReadWritePacket*)pdata);
 			}
 		}
 		break;
 
 	case CHANNEL_EVENT_WRITE_CANCELLED:
 		{
-			if ( g_pRdpTransClient)
+			if ( g_pCtvpTransClient)
 			{
-				g_pRdpTransClient->ChannelWriteComplete((ReadWritePacket*)pdata);
+				g_pCtvpTransClient->ChannelWriteComplete((ReadWritePacket*)pdata);
 			}
 		}
 		break;
@@ -248,7 +237,7 @@ void WINAPI VirtualChannelOpenEvent(DWORD openHandle, UINT event, LPVOID pdata, 
 	default:
 		{
 			OutputDebugString(TEXT("SYSINF_C: unrecognized open event\r\n"));
-			ASSERT(0);
+			//ASSERT(0);
 		}
 		break;
 	}

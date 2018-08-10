@@ -195,6 +195,7 @@ struct CTEPPacket_Init
 
 	// GUID_Emply(CTEP_PACKET_CONTENT_INIT_MASTER) or Server User Session Guid.
 	GUID				guidUserSession;
+	WCHAR				wsUserName[260];
 
 	inline bool IsPacketInit()
 	{
@@ -203,9 +204,18 @@ struct CTEPPacket_Init
 	}
 };
 inline int Create_CTEPPacket_Init(CTEPPacket_Init* pBuffer
-	, USHORT UserIdAttached = (USHORT)-1, const GUID& guid = GUID_NULL)
+	, USHORT UserIdAttached = (USHORT)-1, const GUID& guid = GUID_NULL
+	, WCHAR UserName[260] = nullptr)
 {
 	pBuffer->guidUserSession = guid;
+	if ( UserName)
+	{
+		wcscpy_s(pBuffer->wsUserName, UserName);
+	}
+	else
+	{
+		pBuffer->wsUserName[0] = NULL;
+	}
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
 		, sizeof(CTEPPacket_Init), CTEP_PACKET_CONTENT_INIT, UserIdAttached, (WORD)-1);
 }

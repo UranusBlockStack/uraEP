@@ -266,7 +266,7 @@ HRESULT CTransProTcpSvr::CompleteListen(CTransferChannel* pTransChn, ReadWritePa
 	int nLocalLen, nRmoteLen;
 	LPSOCKADDR pLocalAddr, pRemoteAddr;
 
-	pTransChn->type = TCP;
+	pTransChn->type = TransType_TCP;
 
 	m_lpfnGetAcceptExSockaddrs(
 		pPacket->buff.buff,
