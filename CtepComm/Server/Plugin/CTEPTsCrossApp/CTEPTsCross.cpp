@@ -42,19 +42,24 @@ ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServerCrossApp()
 HRESULT CTransSvrCrossApp::InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack)
 {
 	ASSERT(piCallBack);
-	ASSERT(m_piCallBack == NULL || m_piCallBack == piCallBack);
+	ASSERT( !m_piCallBack || m_piCallBack == piCallBack);
 	ASSERT(m_hMmrPipe == INVALID_HANDLE_VALUE);
 
 	if ( piCallBack)
 	{
-		if ( m_piCallBack)
+		if ( m_piCallBack == piCallBack)
 		{
-			m_piCallBack = piCallBack;
 			return S_FALSE;
 		}
-		
-		m_piCallBack = piCallBack;
-		return S_OK;
+		else if ( !m_piCallBack)
+		{
+			m_piCallBack = piCallBack;
+			return S_OK;
+		}
+		else
+		{
+			return E_INVALIDARG;
+		}
 	}
 
 	return E_UNEXPECTED;
@@ -93,17 +98,16 @@ HRESULT CTransSvrCrossApp::PostRecv(CTransferChannel* pTransChn, ReadWritePacket
 	if( ReadFile(pTransChn->hFile, pPacket->buff.buff, pPacket->buff.maxlength, &dwByte, &pPacket->ol) == FALSE)
 	{
 		DWORD dwErr = GetLastError();
-		if( dwErr != WSA_IO_PENDING)
+		if( dwErr != ERROR_IO_PENDING)
 		{
 			ASSERT(dwErr > 0);
 			m_log.FmtErrorW(3, L"PostSend failed. ErrCode:%d", dwErr);
 			return 0-dwErr;
 		}
-		else
-		{
-			return ERROR_IO_PENDING;
-		}
+
+		return ERROR_IO_PENDING;
 	}
+
 	ASSERT(pPacket->ol.InternalHigh == dwByte);
 	return S_OK;
 }
@@ -120,17 +124,16 @@ HRESULT CTransSvrCrossApp::PostSend(CTransferChannel* pTransChn, ReadWritePacket
 	if (FALSE == WriteFile(pTransChn->hFile,pPacket->buff.buff,pPacket->buff.size,&dwBytes,&pPacket->ol))
 	{
 		long dwErr = GetLastError();
-		if( dwErr != WSA_IO_PENDING)
+		if( dwErr != ERROR_IO_PENDING)
 		{
 			ASSERT(dwErr > 0);
 			m_log.FmtErrorW(3, L"PostSend failed. ErrCode:%d", dwErr);
 			return 0-dwErr;
 		}
-		else
-		{
-			return ERROR_IO_PENDING;
-		}
+
+		return ERROR_IO_PENDING;
 	}
+
 	ASSERT(dwBytes == pPacket->buff.size);
 	return S_OK;
 }
@@ -143,6 +146,10 @@ HRESULT CTransSvrCrossApp::CompleteListen(CTransferChannel* pTransChn, ReadWrite
 	ASSERT(pPacket->hFile != INVALID_HANDLE_VALUE);
 	if (pPacket->hFile == INVALID_HANDLE_VALUE)
 		return E_FAIL;
+
+	ASSERT(pPacket->ol.hEvent);
+	CloseHandle(pPacket->ol.hEvent);
+	pPacket->ol.hEvent = nullptr;
 
 	pTransChn->hFile = pPacket->hFile;
 	return S_OK;
@@ -182,8 +189,8 @@ void CTransSvrCrossApp::Final()
 {
 	if (m_hMmrPipe != INVALID_HANDLE_VALUE)
 	{
-		CloseHandle(m_hMmrPipe);
 		m_hMmrPipe = INVALID_HANDLE_VALUE;
+		CloseHandle(m_hMmrPipe);
 	}
 
 	ctepTsCrossMainThreadClose();
@@ -192,39 +199,74 @@ void CTransSvrCrossApp::Final()
 DWORD CTransSvrCrossApp::_MonitorPipeThread()
 {
 	DWORD dwError = 0;
+	OVERLAPPED ol = {0};
+	ol.hEvent = CreateEvent(0, TRUE, FALSE, 0);
+
 	while ( h_MonitorThread)
 	{
-		WCHAR PipeName[MAX_PATH];
-		swprintf_s(PipeName, CTEPTS_CROSSAPP_PIPE_NAME_TEMPLATE);
-		BOOL bWait = WaitNamedPipe(PipeName, NMPWAIT_WAIT_FOREVER);
-		if ( !bWait)
-			continue;
+		SECURITY_ATTRIBUTES* pSA = 0;
 
-		m_hMmrPipe = CreateFile(PipeName,
-			GENERIC_READ|GENERIC_WRITE, 
-			0,
-			NULL,
-			OPEN_EXISTING,
-			FILE_FLAG_OVERLAPPED,
-			NULL);
+#if SVRNAMEDPIPE_LOW_SECURITY_PIPE
+		pSA = CUserPrivilege::CreateLowIntegritySecurityAttributes(FALSE);
+#endif // SVRNAMEDPIPE_LOW_SECURITY_PIPE
+
+		m_hMmrPipe = CreateNamedPipe(CTEPTS_CROSSAPP_PIPE_NAME_TEMPLATE
+			, PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED
+			, PIPE_TYPE_MESSAGE
+			, PIPE_UNLIMITED_INSTANCES
+			, CTEP_DEFAULT_BUFFER_SIZE
+			, CTEP_DEFAULT_BUFFER_SIZE
+			, NMPWAIT_USE_DEFAULT_WAIT
+			, pSA
+			);
 		dwError = GetLastError();
+
+#if SVRNAMEDPIPE_LOW_SECURITY_PIPE
+		CUserPrivilege::DeleteLowIntegritySecurityAttributes(pSA);
+#endif // SVRNAMEDPIPE_LOW_SECURITY_PIPE
+
 		if ( m_hMmrPipe  == INVALID_HANDLE_VALUE)
 		{
-			ASSERT(dwError == ERROR_PIPE_BUSY);
-			continue;
+			ASSERT(0);
+			break;
 		}
 
+		ClearOverlaped(&ol);
+		BOOL bConnect = ConnectNamedPipe(m_hMmrPipe, &ol);
+		dwError = GetLastError();
+		if ( !bConnect && dwError != ERROR_IO_PENDING && dwError != ERROR_PIPE_CONNECTED)
+		{
+			ASSERT(dwError == ERROR_BROKEN_PIPE && INVALID_HANDLE_VALUE == h_MonitorThread);	// 管道已经关闭,程序等待退出
+			break;
+		}
+
+		DWORD dwRead = 0;
+		bConnect = GetOverlappedResult(m_hMmrPipe, &ol, &dwRead, TRUE);
+		if ( !bConnect)
+		{
+			dwError = GetLastError();
+			m_log.FmtWarningW(2, L"一个连入的管道发生错误. 错误代码:%d", dwError);
+			continue;
+		}
+		ASSERT(dwRead == 0);
+
 		// 获取第一个包,确认用户已经连入了
-		ReadWritePacket *m_Rwpacket = m_piCallBack->AllocatePacket(CTEPGetInterfaceTransServer());
+		ReadWritePacket *m_Rwpacket = m_piCallBack->AllocatePacket(CTEPGetInterfaceTransServerCrossApp());
 		m_Rwpacket->ol.hEvent = CreateEvent(0, TRUE, 0, 0);
 		ASSERT(m_Rwpacket->ol.hEvent && m_Rwpacket->buff.buff && m_Rwpacket->buff.maxlength);
-		DWORD dwRead = 0;
-		BOOL bRead = ReadFile(m_hMmrPipe, m_Rwpacket->buff.buff, m_Rwpacket->buff.maxlength
-			, &dwRead, &m_Rwpacket->ol);
-		if ( !bRead)
+		BOOL bRead = ReadFile(m_hMmrPipe
+			, m_Rwpacket->buff.buff
+			, m_Rwpacket->buff.maxlength
+			, &dwRead
+			, &m_Rwpacket->ol);
+		dwError = GetLastError();
+		if ( bRead && dwError == ERROR_IO_PENDING)
 		{
 			bRead = GetOverlappedResult(m_hMmrPipe, &m_Rwpacket->ol, &dwRead, TRUE);
-			dwError = GetLastError();
+		}
+		else
+		{
+			ASSERT(0);
 		}
 
 		if ( !bRead || dwRead == 0)
@@ -248,6 +290,8 @@ DWORD CTransSvrCrossApp::_MonitorPipeThread()
 			break;
 		}
 	}
+
+	CloseHandle(ol.hEvent);
 
 	return 0;
 }

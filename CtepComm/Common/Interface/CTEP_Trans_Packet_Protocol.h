@@ -13,12 +13,16 @@ struct CTEPPacket_Message;
 
 //#define CTEP_OPTIONAL		// 可选参数,某些条件下没有
 
+#define INVALID_ACID					((USHORT)-1)	// 无效的AppChannelId数值,包括StaticChannel, DynamicChannel, CrossAppChannel
+#define INVALID_UID						((USHORT)-1)	// 无效的UserId数值,包括Session相关User与Session无关User.
+#define INVALID_SESSIONID				((DWORD)-1)		// 无效的windows Session Id.
+
 #define CTEP_DEFAULT_BUFFER_SIZE		(4096*4-80)		// I/O请求的缓冲区大小, RDP通道在较大大小时会丢失数据
 #define CTEP_DEFAULT_BUFFER_DATA_SIZE	(CTEP_DEFAULT_BUFFER_SIZE - sizeof(CTEPPacket_Message))
 #define CTEP_PACKET_HEADER_SIZE			8
 #define CTEP_MAX_APPNAME_LENGTH			16	//include tail '\0'
 
-struct CTEPPacket_Header	// sizeof(this) == 8
+struct CTEPPacket_Header	// sizeof(this) == 8 + 4
 {
 // Data Define
 	WORD  PacketLength;		// include this header.
@@ -44,10 +48,13 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_STATIC		(0x80|CTEP_PACKET_SEGMENT_ENTIRE)
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_BROADCAST		(0x90|CTEP_PACKET_SEGMENT_ENTIRE)
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_SPECIAL		(0xA0|CTEP_PACKET_SEGMENT_ENTIRE)
+
+#define CTEP_PACKET_CONTENT_INITCROSSAPP			CTEP_PACKET_CONTENT_INIT			//CTEP v2.0
+#define CTEP_PACKET_CONTENT_INITCROSSAPP_RSP		CTEP_PACKET_CONTENT_INIT_RSP		//CTEP v2.0
 	BYTE  Type;
 
-	WORD  UserId;			// User Id (0~65534), (WORD)-1 is invalid.
-	WORD  AppChannelId;		// 0~65534, (WORD)-1 is invalid.
+	WORD  UserId;			// User Id (0~65534), INVALID_UID is invalid.
+	WORD  AppChannelId;		// 0~65534, INVALID_ACID is invalid.
 
 	DWORD SequenceId;
 
@@ -79,11 +86,11 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 // Function Define
 	inline bool InvalidUserId()
 	{
-		return UserId == (WORD)-1;
+		return UserId == INVALID_UID;
 	}
 	inline bool InvalidAppChannelId()
 	{
-		return AppChannelId == (WORD)-1;
+		return AppChannelId == INVALID_ACID;
 	}
 
 	inline bool EntirePacket()
@@ -180,7 +187,7 @@ inline int Create_CTEPPacket_Hello(CTEPPacket_Hello* pBuffer, LPCWSTR msg, BOOL 
 	wcscpy_s(pBuffer->msg, 31, msg);
 	pBuffer->msg[31] = 0;
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
-		, sizeof(CTEPPacket_Hello), type, (WORD)-1, (WORD)-1);
+		, sizeof(CTEPPacket_Hello), type, INVALID_UID, INVALID_ACID);
 }
 
 
@@ -204,7 +211,7 @@ struct CTEPPacket_Init
 	}
 };
 inline int Create_CTEPPacket_Init(CTEPPacket_Init* pBuffer
-	, USHORT UserIdAttached = (USHORT)-1, const GUID& guid = GUID_NULL
+	, USHORT UserIdAttached = INVALID_UID, const GUID& guid = GUID_NULL
 	, WCHAR UserName[260] = nullptr)
 {
 	pBuffer->guidUserSession = guid;
@@ -217,7 +224,7 @@ inline int Create_CTEPPacket_Init(CTEPPacket_Init* pBuffer
 		pBuffer->wsUserName[0] = NULL;
 	}
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
-		, sizeof(CTEPPacket_Init), CTEP_PACKET_CONTENT_INIT, UserIdAttached, (WORD)-1);
+		, sizeof(CTEPPacket_Init), CTEP_PACKET_CONTENT_INIT, UserIdAttached, INVALID_ACID);
 }
 
 struct CTEPPacket_Init_Responce
@@ -261,7 +268,7 @@ inline int Create_CTEPPacket_Init_Responce(CTEPPacket_Init_Responce* pBuffer, US
 	}
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
 								  , (USHORT)(sizeof(CTEPPacket_Init_Responce)+sizeof(IN_ADDR)*ipv4Count)
-								  , CTEP_PACKET_CONTENT_INIT_RSP, UserId, (USHORT)-1);
+								  , CTEP_PACKET_CONTENT_INIT_RSP, UserId, INVALID_ACID);
 }
 
 struct CTEPPacket_Message
@@ -368,7 +375,7 @@ struct CTEPPacket_CreateAppRsp
 	USHORT				uPacketOption;
 	USHORT				ePacketLevel;
 	char				AppName[16];
-	USHORT				StaticAppChannelId;	// 保存被创建应用所对应静态通道的ID, 如果创建的是静态通道,那么ID为它本身 or (USHORT)-1
+	USHORT				StaticAppChannelId;	// 保存被创建应用所对应静态通道的ID, 如果创建的是静态通道,那么ID为它本身 or INVALID_ACID
 	USHORT				bResult;	// 1:TRUE, 0:FALSE
 };
 inline int Create_CTEPPacket_CreateAppRsp(CTEPPacket_CreateAppRsp *pBuffer, USHORT UserId, USHORT AppId
@@ -397,7 +404,61 @@ struct CTEPPacket_CloseAppRsp
 };
 
 
+// 
+// CTEP 2.0 new type:
+// 
 
+// this packet is send from CTEP-Server-Out-Process-App to CTEP-Server
+struct CTEPPacket_InitCrossApp
+{
+	// PacketLength = sizeof(CTEPPacket_InitCrossApp)
+	// Type : CTEP_PACKET_CONTENT_INITCROSSAPP
+	CTEPPacket_Header	header;
+	DWORD				dwSessionId;
+	CHAR				sAppName[16];
+
+	inline bool IsPacketInitCrossApp()
+	{
+		return  header.PacketLength == sizeof(CTEPPacket_InitCrossApp)
+			&& header.IsInit();
+	}
+};
+inline int Create_CTEPPacket_InitCrossApp(CTEPPacket_InitCrossApp* pPacket
+	, CHAR AppName[16], DWORD SessionId)
+{
+	pPacket->dwSessionId = SessionId;
+	strcpy_s(pPacket->sAppName, AppName);
+	return Create_CTEPPacket_Header((CTEPPacket_Header*)pPacket
+		, sizeof(CTEPPacket_InitCrossApp), CTEP_PACKET_CONTENT_INIT, INVALID_UID, INVALID_ACID);
+}
+
+// this packet is send from CTEP-Server to CTEP-Server-Out-Process-App
+struct CTEPPacket_InitCrossApp_Responce
+{
+	// PacketLength = sizeof(CTEPPacket_InitCrossApp_Responce)
+	// UserId: 0~65534
+	// AppChannelId: 0~65534
+	// Type : CTEP_PACKET_CONTENT_INIT_RSP
+	CTEPPacket_Header	header;
+
+	// Server User Guid.
+	GUID				guidUserSession;
+
+	inline bool IsPacketInitCrossAppRsp()
+	{
+		return  header.PacketLength == sizeof(CTEPPacket_InitCrossApp_Responce)
+			 && header.IsInitRsp();
+	}
+};
+
+inline int Create_CTEPPacket_InitCrossApp_Responce(CTEPPacket_InitCrossApp_Responce* pBuffer
+								, USHORT AppChannelId, USHORT UserId, const GUID& guidUser)
+{
+	pBuffer->guidUserSession = guidUser;
+	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
+		, (USHORT)sizeof(CTEPPacket_InitCrossApp_Responce)
+		, CTEP_PACKET_CONTENT_INIT_RSP, UserId, AppChannelId);
+}
 
 
 

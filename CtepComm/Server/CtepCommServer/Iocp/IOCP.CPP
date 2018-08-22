@@ -47,8 +47,7 @@ CIOCPServer::CIOCPServer()
 		}
 	}
 
-	FindMoudleInterface(CLoadModules::CtepTransServer);
-	FindMoudleInterface(CLoadModules::CtepAppServer);
+	FindMoudleInterface();
 
 	// Accept请求
 	m_hAcceptEvent = ::WSACreateEvent();
@@ -60,7 +59,7 @@ CIOCPServer::CIOCPServer()
 	m_nMaxAccepts = 150;
 	m_nMaxSends = 1000;
 	m_nMaxFreeBuffers = 2000;
-	m_nMaxConnections = 3000;
+	m_nMaxConnections = 1000;
 
 	m_nIocpOutStandingSend = 0;
 	m_nIocpOutStandingRecv = 0;
@@ -218,13 +217,17 @@ CTransferChannelEx *CIOCPServer::AllocateContext(HANDLE s, ICTEPTransferProtocol
 		pContext->hFile = s;
 		pContext->piTrans = piTrans;
 		pContext->bClosing = FALSE;
-		if ( piTrans == m_TS[0])
+		if ( piTrans == m_TransSvrTcp)
 		{
 			pContext->type = EnTransferChannelType::TransType_TCP;
 		}
-		else if ( piTrans == m_TS[1])
+		else if ( piTrans == m_TransSvrUdp)
 		{
 			pContext->type = EnTransferChannelType::TransType_UDP;
+		}
+		else if ( piTrans == m_TransSvrCrossApp)
+		{
+			pContext->type = EnTransferChannelType::TransType_CrossApp;
 		}
 		else
 		{
@@ -236,9 +239,14 @@ CTransferChannelEx *CIOCPServer::AllocateContext(HANDLE s, ICTEPTransferProtocol
 			{
 				pContext->type = EnTransferChannelType::TransType_SyncMain;
 			}
+			else if ( piTrans->SupportIOCP() == CTEP_TS_SUPPORT_ASYNC)
+			{
+				pContext->type = EnTransferChannelType::TransType_AsyncMain;
+			}
 			else
 			{
 				ASSERT(0);
+				pContext->InitEx();
 				m_queFreeContext.Push(pContext);
 				pContext = nullptr;
 			}
@@ -367,10 +375,10 @@ BOOL CIOCPServer::RemovePendingAccept(ReadWritePacket *pBuffer)
 }
 
 
-BOOL CIOCPServer::Start(int nMaxConnections, int nMaxFreeBuffers)
+BOOL CIOCPServer::Start()
 {
 #ifdef _DEBUG
-	m_log.Message(0x7, L"Debug");
+	m_log.Message(0x8, L"Debug");
 #endif // _DEBUG
 	BOOL bResult = FALSE;
 
@@ -380,8 +388,7 @@ BOOL CIOCPServer::Start(int nMaxConnections, int nMaxFreeBuffers)
 		return FALSE;
 
 	// 保存用户参数
-	m_nMaxConnections = nMaxConnections;
-	m_nMaxFreeBuffers = nMaxFreeBuffers;
+
 
 	// 初始化状态变量
 	m_bShutDown = FALSE;
@@ -393,29 +400,52 @@ BOOL CIOCPServer::Start(int nMaxConnections, int nMaxFreeBuffers)
 		return FALSE;
 
 	HRESULT hr = E_FAIL;
-	for ( DWORD i=0; i< m_TransCount; i++)
+	ICTEPTransferProtocolCallBack* piCallBack = dynamic_cast<ICTEPTransferProtocolCallBack*>(this);
+	ASSERT(piCallBack);
+
+	if ( m_TransSvrTcp)
 	{
-		
-		if ( m_TS[i])
+		if ( SUCCEEDED(m_TransSvrTcp->InitializeCompletePort(piCallBack)))
 		{
-			if ( SUCCEEDED(m_TS[i]->InitializeCompletePort(dynamic_cast<ICTEPTransferProtocolCallBack*>(this))))
+			hr = S_OK;
+			// 注册FD_ACCEPT事件。
+			// 如果投递的AcceptEx I/O不够，线程会接收到FD_ACCEPT网络事件，说明应该投递更多的AcceptEx I/O
+			if ( SOCKET_ERROR == WSAEventSelect(m_TransSvrTcp->GetListenSocket(), m_hAcceptEvent, FD_ACCEPT))
+				hr = S_FALSE;	// 有警告,正确返回
+		}
+		else
+		{
+			ASSERT(0);
+			m_TransSvrTcp = nullptr;
+		}
+	}
+
+	if ( m_TransSvrUdp)
+	{
+		ASSERT(0);// E_NOIMPL;
+	}
+
+	if ( m_TransSvrCrossApp)
+	{
+		if ( FAILED(m_TransSvrCrossApp->InitializeCompletePort(piCallBack)))
+		{
+			ASSERT(0);
+			m_TransSvrCrossApp = nullptr;
+		}
+	}
+
+	for ( DWORD i=0; i< m_TransSvr._nCount; i++)
+	{
+		if ( m_TransSvr[i])
+		{
+			if ( FAILED(m_TransSvr[i]->InitializeCompletePort(piCallBack)))
 			{
-				hr = S_OK;
-				if ( i == 0) //TCP
-				{
-					// 注册FD_ACCEPT事件。
-					// 如果投递的AcceptEx I/O不够，线程会接收到FD_ACCEPT网络事件，说明应该投递更多的AcceptEx I/O
-					if ( SOCKET_ERROR == WSAEventSelect(m_TS[0]->GetListenSocket(), m_hAcceptEvent, FD_ACCEPT))
-						hr = S_FALSE;	// 有警告,正确返回
-				}
-			}
-			else
-			{
-				m_TS[i]->Final();
-				m_TS[i] = NULL;
+				m_TransSvr[i]->Final();
+				m_TransSvr.RemoveItem(i--);
 			}
 		}
 	}
+
 	if ( FAILED(hr))
 	{
 		m_log.FmtError(5, L"Server initialize failed. Error code : 0x%08x", hr);
@@ -471,18 +501,34 @@ DWORD CIOCPServer::_threadListen()
 {
 	// 先在监听套节字上投递几个Accept I/O
 	HRESULT hr = E_FAIL;
-	for (DWORD i=0; i< m_TransCount; i++)
+	if ( m_TransSvrTcp)
 	{
-		if ( m_TS[i])
+		hr = m_TransSvrTcp->PostListen(true);
+		ASSERT(SUCCEEDED(hr));
+	}
+
+	if ( m_TransSvrUdp)
+	{
+	}
+
+	if ( m_TransSvrCrossApp)
+	{
+		if ( m_TransSvrCrossApp)
 		{
-			if ( SUCCEEDED(m_TS[i]->PostListen(true)))
+			hr = m_TransSvrCrossApp->PostListen(true);
+			ASSERT(SUCCEEDED(hr));
+		}
+	}
+
+	for (DWORD i=0; i < m_TransSvr._nCount; i++)
+	{
+		if ( m_TransSvr[i])
+		{
+			if ( FAILED(m_TransSvr[i]->PostListen(true)))
 			{
-				hr = S_OK;
-			}
-			else
-			{
-				m_TS[i]->Final();
-				m_TS[i] = nullptr;
+				m_TransSvr[i]->Final();
+				m_TransSvr.RemoveItem(i);
+				i--;	// 移除以后序号往前挪动一位,所以此index需要再初始化一边
 			}
 		}
 	}
@@ -550,10 +596,10 @@ DWORD CIOCPServer::_threadListen()
 			int nLimit = 0;
 			if(nIndex == 0)			// 2）m_hAcceptEvent事件对象受信，说明投递的Accept请求不够，需要增加
 			{
-				if ( m_TS[0])
+				if ( m_TransSvrTcp)
 				{
 					WSANETWORKEVENTS ne;
-					::WSAEnumNetworkEvents(m_TS[0]->GetListenSocket(), hWaitEvents[nIndex], &ne);
+					::WSAEnumNetworkEvents(m_TransSvrTcp->GetListenSocket(), hWaitEvents[nIndex], &ne);
 					if(ne.lNetworkEvents & FD_ACCEPT)
 					{
 						nLimit = 50;  // 增加的个数，这里设为50个
@@ -580,9 +626,9 @@ DWORD CIOCPServer::_threadListen()
 			int i = 0;
 			while( i++ < nLimit && m_quePendingAccepts.GetCount() < m_nMaxAccepts)
 			{
-				if ( m_TS[0])
+				if ( m_TransSvrTcp)
 				{
-					m_TS[0]->PostListen();
+					m_TransSvrTcp->PostListen();
 				}
 			}
 		}
@@ -622,12 +668,25 @@ DWORD CIOCPServer::_threadListen()
 	while (dwWait == WAIT_IO_COMPLETION )
 		dwWait = ::SleepEx(50, TRUE);		// 给I/O工作线程一个执行的机会
 
-	for (DWORD i=0;i<m_TransCount;i++)
+	if ( m_TransSvrTcp)
 	{
-		if ( m_TS[i])
-		{
-			m_TS[i]->Final();
-		}
+		m_TransSvrTcp->Final();
+	}
+
+	if ( m_TransSvrUdp)
+	{
+		m_TransSvrUdp->Final();
+	}
+
+	if ( m_TransSvrCrossApp)
+	{
+		m_TransSvrCrossApp->Final();
+	}
+
+	for (DWORD i=0;i< m_TransSvr._nCount; i++)
+	{
+		ASSERT( m_TransSvr[i]);
+		m_TransSvr[i]->Final();
 	}
 
 	dwWait = WAIT_IO_COMPLETION ;
@@ -810,7 +869,7 @@ DWORD CIOCPServer::_threadIocpWorker()
 		int nError = NO_ERROR;
 
 		ASSERT(dwTrans == pBuffer->ol.InternalHigh || dwTrans == 0);
-		if ( pBuffer->piTrans == m_TS[0] || pBuffer->piTrans == m_TS[1])	// TCP | UDP
+		if ( pBuffer->piTrans == m_TransSvrTcp || pBuffer->piTrans == m_TransSvrUdp)	// TCP | UDP
 		{
 			DWORD dwFlags = 0;
 			SOCKET s;
@@ -865,7 +924,7 @@ DWORD CIOCPServer::_threadIocpWorker()
 		if ( pBuffer->opType == EmPacketOperationType::OP_Listen)
 		{
 			ASSERT(pContext == NULL);
-			if ( pBuffer->piTrans == m_TS[0])	// 如果是TCP
+			if ( pBuffer->piTrans == m_TransSvrTcp)	// 如果是TCP
 			{
 				ASSERT(nError != 0 || dwTrans != 0);
 			}
@@ -911,7 +970,7 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 	}
 	else
 	{
-		ASSERT( pBuffer->opType == OP_Listen &&pBuffer->buff.size == 0);
+		ASSERT( pBuffer->opType == OP_Listen && pBuffer->buff.size == 0);
 		ASSERT( dwTrans == sizeof(CTEPPacket_Init) || dwTrans == 0);
 
 		RemovePendingAccept(pBuffer);// Listen操作, 出等待列表
@@ -964,10 +1023,13 @@ void CIOCPServer::HandleIO(CTransferChannelEx *pContext, ReadWritePacket *pBuffe
 				break;
 
 			pClient->piTrans->CompleteListen(pClient, pBuffer);
-			if ( pClient->type == TransType_TCP || pClient->type == TransType_UDP || pClient->type == TransType_IocpMain)
+
+			if (	pClient->type == TransType_TCP
+				 || pClient->type == TransType_UDP
+				 || pClient->type == TransType_IocpMain)
 			{
 				// 关联新连接到完成端口对象
-				HANDLE hIocp = ::CreateIoCompletionPort(pClient->hFile, m_hCompletion, (DWORD)pClient, 0);
+				HANDLE hIocp = ::CreateIoCompletionPort(pClient->hFile, m_hCompletion, (ULONG_PTR)pClient, 0);
 				if ( hIocp != m_hCompletion)
 				{
 					ASSERT(0);

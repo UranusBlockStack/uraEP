@@ -67,7 +67,7 @@ public:
 	virtual ULONG GetCurrentConnection()
 	{
 		//LOCK(&m_smapUser);
-		return m_smapUser.GetCount();
+		return (ULONG)m_smapUser.GetCount();
 	}
 
 public:
@@ -187,8 +187,11 @@ public:
 		return bRet ? S_OK : E_FAIL;
 	}
 
-	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pStaticChannel
+	virtual CAppChannel* CreateDynamicChannel(CAppChannel* pAppChannel
 		 , EmPacketLevel level = Middle, USHORT option = NULL) override;// CAppChannel::uPacketOption option
+
+	CAppChannel* createCrossAppChannel(CAppChannel* pStaticChannel, CTransferChannelEx* pTransChn);
+	
 	virtual void	CloseDynamicChannel(CAppChannel* pDynamicChannel) override;
 	virtual HRESULT	CloseDynamicChannel(USHORT AppChannelId, CUserData* pUser/* = nullptr*/) override
 	{
@@ -257,8 +260,11 @@ private://internal function
 
 	inline void closeAppChannel(CAppChannel* pAppChannel);			// close static channel.
 
-	CAppChannelEx* allocateAppChannel(CUserDataEx *user, ICTEPAppProtocol* piAppProt, LPCSTR sAppName
-		, CAppChannelEx *pStaAppChn = nullptr, EmPacketLevel level = Middle, USHORT option = 0);
+	CAppChannelEx* allocateAppChannel(CUserDataEx *user
+		, ICTEPAppProtocol* piAppProt, LPCSTR sAppName
+		, CAppChannelEx *pStaAppChn = nullptr
+		, EmPacketLevel level = Middle, USHORT option = 0
+		, CTransferChannelEx* pTransChn = nullptr);
 	void releaseAppChannel(CAppChannelEx* pAppChnEx);
 
 	CUserDataEx* allocateUser(CTransferChannelEx* pTransChnMain);

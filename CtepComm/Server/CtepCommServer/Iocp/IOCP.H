@@ -3,13 +3,7 @@
 #include "CommonInclude/CommonImpl.h"
 #include "CommonInclude/Tools/FastQueue.h"
 
-#include "Interface/CTEP_Communicate_App_Interface.h"
-#include "Interface/CTEP_Communicate_TransferLayer_Interface.h"
-#include "Interface/CTEP_Trans_Packet_Protocol.h"
-
-#include "Interface/CTEP_Common_Struct_Ex.h"
-
-#include "../LoadModules.h"
+#include "../LoadModulesServer.h"
 
 #include <winsock2.h>
 #include <windows.h>
@@ -22,7 +16,7 @@ using namespace ATL;
 
 
 class CIOCPServer : public ICTEPTransferProtocolCallBack
-	, public CLoadModules
+	, public CLoadModulesServer
 {
 protected:
 	static Log4CppLib m_log;
@@ -30,7 +24,6 @@ protected:
 public:
 //interface ICTEPTransferProtocolCallBack
 	virtual HANDLE GetCompletePort() override {return m_hCompletion;}	// 返回完成端口句柄
-	//virtual HANDLE GetListenEvent() override {return ;}
 	virtual ReadWritePacket* AllocatePacket(ICTEPTransferProtocolServer* pI) override 
 	{
 		ReadWritePacket* pPacket = AllocateBuffer(0, OP_Empty, 0);
@@ -48,7 +41,7 @@ public:
 	~CIOCPServer();
 
 	// 开始服务
-	BOOL Start(int nMaxConnections = 5000, int nMaxFreeBuffers = 2000);
+	BOOL Start();
 	// 停止服务
 	void Shutdown();
 
@@ -103,8 +96,8 @@ protected:
 
 protected:
 	// 通道发送分级结构信息
-#define MQUE_MAX_SEND	500
-#define MQUE_MIN_SEND	100
+#define MQUE_MAX_SEND	500		//当未完成的写请求数量超过这个值时启动<发送等级队列>,所有包先进队列然后等待发送
+#define MQUE_MIN_SEND	100		//当未完成的写请求数量地狱这个值时关闭<发送等级队列>,所有包直接在网络上发送
 	MutliPriorityQueue<ReadWritePacket> m_mqueSendPriority;
 	ThreadLock							m_mqueSPLock;
 

@@ -6,10 +6,14 @@
 enum EnTransferChannelType
 {
 	TransType_Empty = 0,
+
 	TransType_TCP,			//TCP socket连接,可作为主通道和辅助通道;
 	TransType_UDP,			//UDP socket连接,只能作为辅助通道,目前未实现
+
 	TransType_IocpMain,		//支持完成端口类型的主通道,如:CTVP,管道等
-	TransType_SyncMain,		//不支持完成端口的主通道,如:ICA,RDP等
+	TransType_SyncMain,		//不支持完成端口的主通道,使用同步传输, 如:ICA,RDP等
+	TransType_AsyncMain,	//不支持完成端口的主通道,但支持异步传输
+
 	TransType_CrossApp,		//服务器端跨进程动态应用通道专用底层通道,用支持IOCP的命名管道实现
 };
 
@@ -95,8 +99,8 @@ interface ICTEPTransferProtocolCallBack
 {
 	//支持完成端口
 	virtual HANDLE GetCompletePort() = 0;	// 返回完成端口句柄
-	//virtual HANDLE GetListenEvent() = 0;	// only TCP
-	virtual BOOL InsertPendingAccept(ReadWritePacket *pBuffer) = 0;
+	virtual BOOL InsertPendingAccept(ReadWritePacket *pBuffer) = 0;	//插入等待用户数据链表,避免出现空数据连接连入
+																	//,使用这个方法时必须实现ICTEPTransferProtocolServer接口的GetDuration方法
 
 	virtual ReadWritePacket* AllocatePacket(ICTEPTransferProtocolServer* pI) = 0;
 	virtual void FreePacket(ReadWritePacket* ) = 0;
@@ -111,6 +115,7 @@ interface ICTEPTransferProtocolServer
 	virtual LPCSTR GetName() = 0;	// 返回传输协议名称
 
 #define CTEP_TS_SUPPORT_IOCP		1
+#define CTEP_TS_SUPPORT_ASYNC		2
 #define CTEP_TS_SUPPORT_SYNC		0
 	virtual DWORD SupportIOCP() = 0;	// 是否支持完成端口模型
 	virtual long GetDuration(ReadWritePacket* pPacket) = 0;		// 判断一个Socket存在的时间,只有TCP实现,其他返回-1;

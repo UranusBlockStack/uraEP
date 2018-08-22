@@ -108,8 +108,8 @@ public:
 	{
 		wsUserName[0] = NULL;
 
-		UserId		= ((USHORT)-1);
-		dwSessionId	= ((DWORD)-1);
+		UserId		= INVALID_UID;
+		dwSessionId	= INVALID_SESSIONID;
 		Type		= (User_Normal);
 		Status		= User_Invalid;
 

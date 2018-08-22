@@ -6,8 +6,9 @@
 #define CTEPTS_CROSSAPP_PIPE_NAME_TEMPLATE		CTMMR_PIPE_NAME_TEMPLATE
 
 #define SVRNAMEDPIPE_MAX_PACKET_SIZE		8*1024
+
+#include "CommonInclude/Tools/UserPrivilege.h"
 #define SVRNAMEDPIPE_LOW_SECURITY_PIPE		TRUE
-#define CTRL_PIPE_TIMEOUT					1000
 
 class CTransSvrCrossApp : public ICTEPTransferProtocolServer
 {
@@ -24,7 +25,7 @@ public:
 	virtual LPCSTR  GetName() override { return "CTVP";}
 	virtual DWORD   SupportIOCP() override { return CTEP_TS_SUPPORT_IOCP; };
 	virtual SOCKET  GetListenSocket() override {return INVALID_SOCKET;}; //Only TCP/UDP, ÆäËû·µ»ØINVALID_SOCKET(-1)
-	virtual LONG    GetDuration(ReadWritePacket* pPacket) override {return -1;};
+	virtual LONG    GetDuration(ReadWritePacket* ) override {return -1;};
 	virtual HRESULT InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack) override;
 	virtual HRESULT PostListen(bool bFirst = false) override;
 	virtual HRESULT CompleteListen(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;

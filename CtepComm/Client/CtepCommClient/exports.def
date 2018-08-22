@@ -1,5 +1,12 @@
 LIBRARY
 
 EXPORTS
-	CTEPCommClientInitalize
-	CTEPCommClientClose
+	CTEPCommClientInitalize		@1
+	CTEPCommClientClose			@2
+
+	DllRegisterServer			PRIVATE
+	DllUnregisterServer			PRIVATE
+	DllInstall					PRIVATE
+
+
+

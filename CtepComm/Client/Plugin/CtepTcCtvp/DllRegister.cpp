@@ -1,7 +1,10 @@
 #include "stdafx.h"
-#include "RegEdit.h"
+#include "CommonInclude/Regedit/RegEdit.cpp"
 
-LPWSTR subkey = L"Software\\Microsoft\\CloudTimes\\CtepTcCtvp";
+
+LPCWSTR subkey = L"Software\\Microsoft\\CloudTimes\\CtepTcCtvp";
+LPCWSTR keyname = L"Name";
+
 STDAPI DllRegisterServer(void)
 {
 	HRESULT hr = SELFREG_E_CLASS;
@@ -18,7 +21,7 @@ STDAPI DllRegisterServer(void)
 	ASSERT(bRet); 
 	if ( !bRet) goto End;
 
-	bRet = Reg.Write(L"Name", path);
+	bRet = Reg.Write(keyname, path);
 	ASSERT(bRet);
 	if ( !bRet) goto End;
 

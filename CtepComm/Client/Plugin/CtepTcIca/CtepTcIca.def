@@ -1,0 +1,7 @@
+LIBRARY
+EXPORTS
+        Load            @1
+
+		DllRegisterServer		PRIVATE
+		DllUnregisterServer		PRIVATE
+		DllInstall				PRIVATE

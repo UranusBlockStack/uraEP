@@ -4,9 +4,47 @@
 #include "stdafx.h"
 #include "CTEPTSTcp.h"
 
+class CTransProTcpSvr : public ICTEPTransferProtocolServer
+{
+public:
+	CTransProTcpSvr();
+	~CTransProTcpSvr();
+
+public:
+	virtual LPCSTR GetName() override {return "TCP";}	// 返回传输协议名称;
+	virtual DWORD SupportIOCP() override{return CTEP_TS_SUPPORT_IOCP;}	// 是否支持完成端口模型
+	virtual SOCKET GetListenSocket() override;
+
+	virtual HRESULT InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack) override;
+	virtual HRESULT PostListen(bool bFirst = false) override;
+
+	virtual HRESULT PostRecv(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	virtual HRESULT PostSend(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	virtual HRESULT CompleteListen(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+
+	virtual long CTransProTcpSvr::GetDuration(ReadWritePacket* pPacket) override;
+	virtual HRESULT Disconnect(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	virtual void Final() override;
+
+	// Tcp/Rdp Only
+	virtual USHORT GetPort() override {return m_uPort;}	// 返回TCP/RDP监听端口号
+
+private:
+	Log4CppLib m_log;
+
+	USHORT m_uPort;
+	ICTEPTransferProtocolCallBack* m_piCallBack;
+
+	SOCKET m_sListen;
+	CRITICAL_SECTION cs;
+	LPFN_ACCEPTEX m_lpfnAcceptEx;	// AcceptEx函数地址
+	LPFN_GETACCEPTEXSOCKADDRS m_lpfnGetAcceptExSockaddrs; // GetAcceptExSockaddrs函数地址
+};
+
+
 CTransProTcpSvr gOne;
 
-ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer()
+ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServerTcp()
 {
 	return dynamic_cast<ICTEPTransferProtocolServer*>(&gOne);
 }

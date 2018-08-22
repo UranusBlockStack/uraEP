@@ -6,14 +6,14 @@
 
 #define CTEP_COMM_CLIENT_TCP_CONNECT_FAILED		L"与服务器的快速连接建立失败，有可能是被服务器端防火墙拦截了，将启用备选慢速连接。请联系管理员确认服务器端设置。"
 
-class CCtepCommClient : public ICTEPTransferProtocolClientCallBack, public CLoadModules
+class CCtepCommClient : public ICTEPTransferProtocolClientCallBack
+	, public CLoadModulesClient
 {
 public:
 	CCtepCommClient():m_bWorking(FALSE), m_log("CommClt")
 		, m_evtRdpStartWait(NULL), m_hTrdStartWait(NULL)
 		, m_hWndMain(NULL)
 	{
-		m_UserEx.Initialize(nullptr, &GUID_NULL);
 		ReadWritePacket* pBuffer = new ReadWritePacket();
 		pBuffer->PacketInit();
 		m_queFreePacket.Initialize(pBuffer, true, true, 1);
@@ -38,8 +38,7 @@ public:
 		bRet = SetCurrentDirectory(pathNew);
 		m_log.FmtMessage(2, L"Old:[%s], New:[%s], bRet:%d"
 			, pathOld, pathNew, bRet);
-		FindMoudleInterface(CLoadModules::CtepTransClient);
-		FindMoudleInterface(CLoadModules::CtepAppClient);
+		FindMoudleInterface();
 		SetCurrentDirectory(pathOld);
 	}
 	~CCtepCommClient()
@@ -121,25 +120,24 @@ public:
 
 	HRESULT Initalize(ICTEPTransferProtocolClient* piTransProtClt, const sockaddr* soa, int size)
 	{
-		ASSERT(piTransProtClt && piTransProtClt != m_TC[1] && m_AppCount
-			 && !m_bWorking && !m_UserEx.pTransChnMain && m_UserEx.Status == User_Invalid);
+		ASSERT(piTransProtClt && piTransProtClt != m_TransCltUdp && m_APP._nCount
+			 && !m_bWorking && !m_UserEx.pTransChnMain && (m_UserEx.Status == User_Invalid || m_UserEx.Status == User_Disconnected));
 		if ( !piTransProtClt)
 			return E_INVALIDARG;
 
-		if ( m_AppCount == 0)
+		if ( m_APP._nCount == 0)
 			return E_NOTIMPL;
 
 		if ( m_UserEx.Status != User_Invalid)
 			return S_FALSE;
 
-		m_UserEx.Status = User_Connected;
 		HRESULT hr = piTransProtClt->Initialize( this);
 		if ( FAILED(hr))
 			goto End;
 
 		CTransferChannelEx* pTransMain = AllocateContext(INVALID_HANDLE_VALUE, piTransProtClt);
 		ASSERT(pTransMain);
-		m_UserEx.pTransChnMain = pTransMain;
+		m_UserEx.Initialize(pTransMain, &GUID_NULL);
 		if ( soa && size > 0)
 		{
 			memcpy(&pTransMain->addrRemote, soa, size);
@@ -148,7 +146,8 @@ public:
 		hr = piTransProtClt->Connect(pTransMain);
 		ASSERT(SUCCEEDED(hr));
 
-		if ( !_stricmp(piTransProtClt->GetName(), "RDP"))
+		if (	!_stricmp(piTransProtClt->GetName(), "RDP")
+			 || !_stricmp(piTransProtClt->GetName(), "ICA"))
 		{
 			// 1,先发送一个Hello包
 			ReadWritePacket* pPacketHello = AllocatePacket(pTransMain, OP_IocpSend, 0);
@@ -187,13 +186,13 @@ public:
 		if ( FAILED(hr))
 			goto End;
 
-		if ( m_TC[0] && m_TC[0] != piTransProtClt)
+		if ( m_TransCltTcp && m_TransCltTcp != piTransProtClt)
 		{
-			m_TC[0]->Initialize(this);
+			m_TransCltTcp->Initialize(this);
 		}
-		if ( m_TC[1])
+		if ( m_TransCltUdp)
 		{
-			m_TC[1]->Initialize(this);
+			m_TransCltUdp->Initialize(this);
 		}
 
 		m_bWorking = TRUE;
@@ -202,8 +201,8 @@ public:
 
 		if ( pTransMain->type == TransType_TCP)
 		{
-			doStart(pTransMain);
-			hr = E_FAIL;
+			doStart(pTransMain);	// 进入执行循环读socket操作,直到连接中断结束
+			hr = E_FAIL;			// 程序退出回收内存
 		}
 		else
 		{
@@ -259,7 +258,7 @@ public:// interface ICTEPTransferProtocolClientCallBack
 
 	bool connectTcp(const GUID& guidUserHost, CTransferChannelEx* pTransChnExTcp, SOCKADDR_IN *addr)
 	{
-		ASSERT(m_TC[0] && addr);
+		ASSERT(m_TransCltTcp && addr);
 
 		// 试图连接TCP
 		CString title;
@@ -272,11 +271,11 @@ public:// interface ICTEPTransferProtocolClientCallBack
 			);
 		SetMainWindowTitle(title);
 		HRESULT hr = E_FAIL;
-		ASSERT(!m_UserEx.pTransChnTcp && pTransChnExTcp->piTransClt == m_TC[0]);
+		ASSERT(!m_UserEx.pTransChnTcp && pTransChnExTcp->piTransClt == m_TransCltTcp);
 		ReadWritePacket* pPacket = AllocatePacket(pTransChnExTcp, OP_IocpSend, sizeof(CTEPPacket_Init));
 		Create_CTEPPacket_Init((CTEPPacket_Init*)pPacket->buff.buff, m_UserEx.UserId, guidUserHost);
 		memcpy(&pTransChnExTcp->addrRemote, addr, sizeof(SOCKADDR_IN));
-		hr = m_TC[0]->Connect(pTransChnExTcp, pPacket);
+		hr = m_TransCltTcp->Connect(pTransChnExTcp, pPacket);
 		ReleasePacket(pPacket);
 		if ( FAILED(hr))
 		{
@@ -294,7 +293,7 @@ public:// interface ICTEPTransferProtocolClientCallBack
 		// 接收第一个数据包
 		ReadWritePacket* pPacketRecv = AllocatePacket(pTransChnExTcp, OP_IocpRecv);
 		pPacketRecv->buff.buff = pTransChnExTcp->rbufPacket.GetBuffer(&pPacketRecv->buff.maxlength);
-		hr = m_TC[0]->Recv(pTransChnExTcp, pPacketRecv);
+		hr = m_TransCltTcp->Recv(pTransChnExTcp, pPacketRecv);
 		ReleasePacket(pPacketRecv);
 
 		if ( hr == S_OK && !pTransChnExTcp->bClosing)
@@ -323,7 +322,7 @@ public:// interface ICTEPTransferProtocolClientCallBack
 
 		if ( !pPacket)
 		{
-			if ( pTransChnEx->piTransClt == m_TC[0] && !pTransChnEx->pUser)
+			if ( pTransChnEx->piTransClt == m_TransCltTcp && !pTransChnEx->pUser)
 			{
 				ASSERT(m_UserEx.pTransChnTcp == 0);
 				pTransChnEx->bClosing = TRUE;
@@ -392,7 +391,7 @@ public:// interface ICTEPTransferProtocolClientCallBack
 				if ( pTransChnEx == m_UserEx.pTransChnMain)
 				{
 					ASSERT(
-						(m_UserEx.UserId == (USHORT)-1 && m_UserEx.guidUser == GUID_NULL)
+						(m_UserEx.UserId == INVALID_UID && m_UserEx.guidUser == GUID_NULL)
 						||
 						(pTransChnEx->type == TransType_TCP && m_UserEx.UserId == pHeader->GetUserId() && m_UserEx.guidUser == pInitRsp->guidUserSession)
 						);
@@ -425,7 +424,7 @@ public:// interface ICTEPTransferProtocolClientCallBack
 				}
 				else
 				{
-					if ( pTransChnEx->piTransClt == m_TC[0] && !pTransChnEx->pUser)
+					if ( pTransChnEx->piTransClt == m_TransCltTcp && !pTransChnEx->pUser)
 					{
 						ASSERT(m_UserEx.pTransChnTcp == 0);
 						OnAppRetireve(pTransChnEx);
@@ -699,9 +698,9 @@ protected: // internel function
 		int iConnectTcp = -1;
 		CTransferChannelEx* pTransChnExTcp = nullptr;
 
-		if ( m_TC[0])//TCP
+		if ( m_TransCltTcp)//TCP
 		{
-			pTransChnExTcp = AllocateContext(INVALID_HANDLE_VALUE, m_TC[0]);
+			pTransChnExTcp = AllocateContext(INVALID_HANDLE_VALUE, m_TransCltTcp);
 			DWORD nAddrCount = _countof(TcpParam.sockaddrRdp);
 			for (DWORD j = 0; j < nAddrCount; j++)
 			{
@@ -727,7 +726,7 @@ protected: // internel function
 			}
 		}
 
-		if ( m_TC[1])//UDP
+		if ( m_TransCltUdp)//UDP
 		{
 			ASSERT(0);
 		}
@@ -1021,14 +1020,15 @@ public: // Event
 	virtual BOOL OnStart() override
 	{
 		// 初始化所有App
-		for ( DWORD i=0; i<m_AppCount;i++)
+		for ( DWORD i=0; i < m_APP._nCount ;i++)
 		{
 			if ( m_APP[i])
 			{
 				HRESULT hr = m_APP[i]->Initialize((ICTEPAppProtocolCallBack*)this, 0);
 				if ( FAILED(hr))
 				{
-					m_APP[i] = nullptr;
+					m_APP.RemoveItem(i);
+					i--;
 				}
 			}
 		}
@@ -1045,7 +1045,7 @@ public: // Event
 			pAppChnEx = m_smapAppChn.FindFirst();
 		}
 
-		for ( DWORD i=0; i < m_AppCount; i++)
+		for ( DWORD i=0; i < m_APP._nCount; i++)
 		{
 			if ( m_APP[i])
 			{
@@ -1056,13 +1056,13 @@ public: // Event
 
 	virtual void OnAppRetireve(CTransferChannelEx* pTransChn) override
 	{
-		for (DWORD i=0; i < m_AppCount; i++)
+		for (DWORD i=0; i < m_APP._nCount; i++)
 		{
 			// 枚举所有App
 			ReadWritePacket* pPacket = AllocatePacket(pTransChn, OP_IocpSend, sizeof(CTEPPacket_CreateApp));
 			ASSERT(pPacket);
 			CTEPPacket_CreateApp* pHeader = (CTEPPacket_CreateApp*)pPacket->buff.buff;
-			Create_CTEPPacket_CreateApp(pHeader, m_UserEx.UserId, (USHORT)-1
+			Create_CTEPPacket_CreateApp(pHeader, m_UserEx.UserId, INVALID_ACID
 				, 0, "", 0, EmPacketLevel::Middle);
 			pHeader->Key = 0;
 
@@ -1094,7 +1094,7 @@ public: // Event
 			if ( pRecv->bResult)
 			{
 				ASSERT(!pHeader->InvalidAppChannelId());
-				for ( DWORD i = 0; i < m_AppCount; i++)
+				for ( DWORD i = 0; i < m_APP._nCount; i++)
 				{
 					ICTEPAppProtocol* piRetrieve = m_APP[i];
 					ICTEPAppProtocolEx* piRetrieveEx = nullptr;
@@ -1247,14 +1247,13 @@ public:
 		if ( !pAppChnEx)
 			return ;
 
-
 		if ( pAppChnEx->Type == DynamicChannel)
 		{
 			pAppChnEx->RemoveLink();
 		}
 		else
 		{
-			LOCK((CMyCriticalSection*)pAppChnEx);
+			LOCK(pAppChnEx);
 			ASSERT(pAppChnEx->Type == StaticChannel);
 			while ( pAppChnEx->pNextDynamicAppChannel)
 			{
@@ -1280,9 +1279,13 @@ public:
 
 		if ( pAppChnEx->piAppProtocol)
 		{
+			LOCK(pAppChnEx);
 			ICTEPAppProtocol* pi = pAppChnEx->piAppProtocol;
-			pAppChnEx->piAppProtocol = nullptr;
-			pi->Disconnect(&m_UserEx, pAppChnEx);
+			if ( pi)
+			{
+				pAppChnEx->piAppProtocol = nullptr;
+				pi->Disconnect(&m_UserEx, pAppChnEx);
+			}
 		}
 
 		pAppChnEx = m_smapAppChn.Pop(pAppChnEx->AppChannelId);

@@ -205,7 +205,11 @@ DWORD CTransProCtvpSvr::_MonitorPipeThread()
 		swprintf_s(PipeName, CTEPTS_CTVP_PIPE_NAME_TEMPLATE, dwConsoleId);
 		BOOL bWait = WaitNamedPipe(PipeName, NMPWAIT_WAIT_FOREVER);
 		if ( !bWait)
+		{
+			if (h_MonitorThread)
+				SleepEx(15000, TRUE);	// 如果没有找到指定Pipe管道,则等待15秒后再试
 			continue;
+		}
 
 		m_hMmrPipe = CreateFile(PipeName,
 			GENERIC_READ|GENERIC_WRITE, 
@@ -247,6 +251,8 @@ DWORD CTransProCtvpSvr::_MonitorPipeThread()
 		}
 
 		// 通知上层一个新的连接建立
+		CloseHandle(m_Rwpacket->ol.hEvent);
+		m_Rwpacket->ol.hEvent = nullptr;
 		m_Rwpacket->hFile = m_hMmrPipe;
 		m_Rwpacket->opType = EmPacketOperationType::OP_Listen;
 		if( !PostQueuedCompletionStatus(m_piCallBack->GetCompletePort(), dwRead, 0, &m_Rwpacket->ol))

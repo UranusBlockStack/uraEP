@@ -4,12 +4,43 @@
 #include "stdafx.h"
 #include "CTEPTCTcp.h"
 
+class CTransProTcpClt : public ICTEPTransferProtocolClient
+{
+public:
+	CTransProTcpClt();
+	~CTransProTcpClt();
+
+public:
+	virtual LPCSTR GetName() override {return "TCP";}	// 返回传输协议名称;
+
+	virtual HRESULT Initialize(ICTEPTransferProtocolClientCallBack* pI) override;
+	virtual void Final() override;
+
+	virtual HRESULT Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket = 0) override;
+	virtual HRESULT Disconnect(CTransferChannel* pTransChn) override;// RDP返回: E_NOTIMPL
+
+	virtual HRESULT Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	virtual HRESULT Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;	// TCP/UDP, RDP不支持,返回E_NOIMPL
+
+
+private:
+	Log4CppLib m_log;
+
+	USHORT m_uPort;
+	ICTEPTransferProtocolClientCallBack* m_piCallBack;
+
+	CTransferChannel* volatile m_pTransChn;
+
+	_LiMB::CMyCriticalSection lckSend;
+	_LiMB::CMyCriticalSection lckRecv;
+};
+
 CTransProTcpClt gOne;
 
 #define DEFAULT_PORT 4567
 
 
-ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClient()
+ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClientTcp()
 {
 	return dynamic_cast<ICTEPTransferProtocolClient*>(&gOne);
 }

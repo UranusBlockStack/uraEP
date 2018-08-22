@@ -244,7 +244,7 @@ public:
 		ASSERT(!pTransChnUdp);
 
 		Status = User_Invalid;
-		UserId = (USHORT)-1;
+		UserId = INVALID_UID;
 	}
 
 	void Initialize(CTransferChannelEx* pMain, const GUID* pGuid = nullptr)
@@ -261,6 +261,7 @@ public:
 		if ( pMain)
 		{
 			pTransChnMain = pMain;
+			pMain->pUser = this;
 			Status = User_Connected;
 		}
 		else
@@ -288,7 +289,7 @@ public:
 	BOOL AddApp(CAppChannel* pAppChannel)
 	{
 		USHORT AppId = pAppChannel->AppChannelId;
-		ASSERT(pAppChannel && AppId != (USHORT)-1);
+		ASSERT(pAppChannel && AppId != INVALID_ACID);
 		return collAppStaticChannel.SetAt(AppId, pAppChannel);
 	}
 
@@ -328,7 +329,9 @@ public:
 		LOCK(this);
 
 		bClosing = TRUE;
-		AppChannelId = (USHORT)-1;
+		AppChannelId = INVALID_ACID;
+		StaticACId = INVALID_ACID;
+		TargetACId = INVALID_ACID;
 
 		RemoveLink();
 
@@ -337,7 +340,7 @@ public:
 // 		pUser = nullptr;
 // 		ASSERT(pAppParam == nullptr);
 // 
-// 		AppChannelId = (USHORT)-1;
+// 		AppChannelId = INVALID_ACID;
 // 		piAppProtocol = nullptr;
 // 		Level = Low;
 // 		uPacketOption = 0;
@@ -345,41 +348,72 @@ public:
 // 		nCount = 0;
 	}
 
-	void Initialize(CUserDataEx *inUserEx, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName,
-		CAppChannelEx *inStaAppChn /*= nullptr*/, EmPacketLevel inlevel /*= Middle*/, USHORT inOption /*= 0*/)
+	void InitializeCrossApp(CUserDataEx *inUserEx, CTransferChannelEx* inpTransChnEx
+		, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName
+		, CAppChannelEx *inStaAppChn)
 	{
-		ASSERT(pNext == NULL && inStaAppChn != this && pAppParam == nullptr);
+		ASSERT(pNext == NULL && pAppParam == nullptr);
+		ASSERT(this && inpiAppProt && inStaAppChn != this);
 		Init();
 
 		sAppName = inAppName;
 		pStaticAppChannel = inStaAppChn;
+		pUser = inUserEx;
+		dwInterfaceVer = inpiAppProt->GetInterfaceVersion();
+		piAppProtocol = inpiAppProt;
+		Level = Middle;
+		uPacketOption = 0;
+
 		pNextDynamicAppChannel = nullptr;
 		bClosing = FALSE;
 
 		if ( bufData.buff)
-		{
 			free(bufData.buff);
-		}
-		bufData.Init();
-		pUser = inUserEx;
 
+		bufData.Init();
+		ASSERT(pUser && pStaticAppChannel);
+
+		pTransChannel = inpTransChnEx;
+		Type = CrossDyncChannel;
+		nCount = PushLink(pStaticAppChannel);
+	}
+
+	void Initialize(CUserDataEx *inUserEx, ICTEPAppProtocol* inpiAppProt, LPCSTR inAppName,
+		CAppChannelEx *inStaAppChn /*= nullptr*/, EmPacketLevel inlevel /*= Middle*/, USHORT inOption /*= 0*/)
+	{
+		ASSERT(pNext == NULL && pAppParam == nullptr);
+		ASSERT(this && inpiAppProt && inStaAppChn != this);
+		Init();
+
+		sAppName = inAppName;
+		pStaticAppChannel = inStaAppChn;
+		pUser = inUserEx;
+		dwInterfaceVer = inpiAppProt->GetInterfaceVersion();
 		piAppProtocol = inpiAppProt;
 		Level = inlevel;
 		uPacketOption = inOption;
+
+		pNextDynamicAppChannel = nullptr;
+		bClosing = FALSE;
+
+		if ( bufData.buff)
+			free(bufData.buff);
+		bufData.Init();
+
 		ASSERT(pUser);
 		ASSERT( !pStaticAppChannel || 0 == (uPacketOption&Packet_Can_Lost));
 
 		if ( pStaticAppChannel && (uPacketOption&Packet_Can_Lost) && inUserEx->pTransChnUdp)
 		{
-			this->pTransChannel = inUserEx->pTransChnUdp;
+			pTransChannel = inUserEx->pTransChnUdp;
 		}
 		else if ( inUserEx->pTransChnTcp)
 		{
-			this->pTransChannel = inUserEx->pTransChnTcp;
+			pTransChannel = inUserEx->pTransChnTcp;
 		}
 		else if ( inUserEx->pTransChnMain)
 		{
-			this->pTransChannel = inUserEx->pTransChnMain;
+			pTransChannel = inUserEx->pTransChnMain;
 		}
 		else
 		{
@@ -389,20 +423,16 @@ public:
 
 		if ( pStaticAppChannel)	// 当前生成的是一个指定静态通道的附属动态通道
 		{
-#ifdef _DEBUG
-			
-#endif // _DEBUG
-
 			Type = DynamicChannel;
+			StaticACId = pStaticAppChannel->AppChannelId;
 			nCount = PushLink(pStaticAppChannel);
 		}
 		else	// 当前生成的是静态通道
 		{
 			Type = StaticChannel;
+			StaticACId = INVALID_ACID;
 			pStaticAppChannel = this;
 			nCount = 1;
-
-			
 		}
 	}
 
@@ -532,7 +562,7 @@ public:
 	inline BOOL QueryDisconnect()	// 是否可以关闭此通道
 	{
 		ASSERT(pUser && this);
-		if ( dwInterfaceVer >= 1)
+		if ( dwInterfaceVer == 1)
 		{
 			return piAppProtocolEx->QueryDisconnect(pUser, this);
 		}

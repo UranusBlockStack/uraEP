@@ -5,9 +5,7 @@
 #define CTMMR_PIPE_NAME_TEMPLATE			TEXT("\\\\.\\pipe\\CloudtimesMMrPipeName-%d")
 #define CTEPTS_CTVP_PIPE_NAME_TEMPLATE		CTMMR_PIPE_NAME_TEMPLATE
 
-#define SVRNAMEDPIPE_MAX_PACKET_SIZE		8*1024
 #define SVRNAMEDPIPE_LOW_SECURITY_PIPE		TRUE
-#define CTRL_PIPE_TIMEOUT					1000
 
 class CTransProCtvpSvr : public ICTEPTransferProtocolServer
 {
