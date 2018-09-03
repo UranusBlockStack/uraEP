@@ -1237,7 +1237,11 @@ public:
 			m_smapAppChn[uAppChnId] = pNewAppChannel;
 			m_smapAppChn.Unlock();
 
-			piApp->Connect(&m_UserEx, pNewAppChannel, pNewAppChannel->pStaticAppChannel);
+			HRESULT hr = piApp->Connect(&m_UserEx, pNewAppChannel, pNewAppChannel->pStaticAppChannel);
+			if ( FAILED(hr))
+			{
+				CloseDynamicChannel(pNewAppChannel);
+			}
 		}
 
 		return pNewAppChannel;

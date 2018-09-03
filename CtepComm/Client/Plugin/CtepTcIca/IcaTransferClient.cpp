@@ -43,24 +43,21 @@ BOOL InitializeCtepCommCltModule()
 	DWORD dwErr = 0;
 	if ( !hModule)
 	{
-		CRegistry Reg(HKEY_CURRENT_USER);
+		CRegistry Reg(HKEY_LOCAL_MACHINE);
+		// include in file:CtepComm/Client/CtepCommClient/DllRegisterCommClt.cpp
 		static LPCWSTR CtepCommClientSubKey = L"Software\\CloudTimes\\CloudTimes Extension Protocol Client";
 		static LPCWSTR CtepCommClientKeyName = L"Name";
-		static LPCWSTR CtepCommClientKeyName2 = L"Path";
-
 		if ( !Reg.Open(CtepCommClientSubKey))
 			goto ErrorEnd;
 
-		CString Path, Dir;
+		CString Path;
 		if ( !Reg.Read(CtepCommClientKeyName, Path))
 			goto ErrorEnd;
 
-		Reg.Read(CtepCommClientKeyName2, Dir);
-
 		hModule = LoadLibrary(L"D:\\WorkSpace\\Project2\\CtepComm\\Debug\\CtepCommClient.dll");
 		dwErr = GetLastError();
-		g_log.FmtMessageW(3, L"InitializeCtepCommCltModule LoadLibrary path:[%s] Dir:[%s] Return Module:[0x%08x] Err:%d"
-			, Path, Dir, hModule, dwErr);
+		g_log.FmtMessageW(3, L"InitializeCtepCommCltModule LoadLibrary path:[%s] Return Module:[0x%08x] Err:%d"
+			, Path, hModule, dwErr);
 		ASSERT(hModule);
 	}
 

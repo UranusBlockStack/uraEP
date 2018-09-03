@@ -411,6 +411,11 @@ void CCtepCommunicationServer::OnConnectionEstablished(CTransferChannelEx *pCont
 				m_log.Error(3, L"ConnectEstablished - allocateUser Failed.");
 				goto ErrorEnd;
 			}
+			memcpy_s(&pUserEx->addrLocal6, sizeof(pUserEx->addrLocal6)
+					, &pContext->addrLocal6, sizeof(pContext->addrLocal6));
+			memcpy_s(&pUserEx->addrRemote6, sizeof(pUserEx->addrRemote6)
+				, &pContext->addrRemote6, sizeof(pContext->addrRemote6));
+
 			m_log.print(L"TCP Make a new User: %d", pUserEx->UserId);
 		} 
 		else
@@ -430,7 +435,7 @@ void CCtepCommunicationServer::OnConnectionEstablished(CTransferChannelEx *pCont
 			}
 
 			GUID guidServer;
-			memcpy(&guidServer, &pInit->guidUserSession, sizeof(GUID));
+			memcpy(&guidServer, &pInit->guidUserSession, sizeof(GUID));	// 拷贝出来防止头字节不对齐的问题
 			if ( !IsEqualGUID(guidServer, pUserEx->guidUser))
 			{
 				m_log.Error(3, L"ConnectEstablished Failed. Guid not match.");
@@ -438,6 +443,12 @@ void CCtepCommunicationServer::OnConnectionEstablished(CTransferChannelEx *pCont
 			}
 
 			pUserEx->Lock();
+			ASSERT(pUserEx->addrLocal.sin_addr.S_un.S_addr == 0 &&
+				   pUserEx->addrRemote.sin_addr.S_un.S_addr == 0);
+			memcpy_s(&pUserEx->addrLocal6, sizeof(pUserEx->addrLocal6)
+				, &pContext->addrLocal6, sizeof(pContext->addrLocal6));
+			memcpy_s(&pUserEx->addrRemote6, sizeof(pUserEx->addrRemote6)
+				, &pContext->addrRemote6, sizeof(pContext->addrRemote6));
 			pUserEx->pTransChnTcp = pContext;
 			pContext->pUser = pUserEx;
 			pUserEx->Unlock();
@@ -603,6 +614,8 @@ void CCtepCommunicationServer::OnConnectionClosing(CTransferChannelEx *pContext,
 	pUserEx->Status = User_Disconnected;
 
 	// 关闭所有底层连接
+	ZeroObject(pUserEx->addrLocal6);
+	ZeroObject(pUserEx->addrRemote6);
 	if ( pUserEx->pTransChnTcp)
 	{
 		CloseAConnection(pUserEx->pTransChnTcp);

@@ -8,7 +8,7 @@ static LPCWSTR CtepCommClientKeyName2 = L"Path";
 
 HRESULT WINAPI DllRegisterServer(void)
 {
-	CRegistry Reg(HKEY_CURRENT_USER);
+	CRegistry Reg(HKEY_LOCAL_MACHINE);
 	WCHAR path[MAX_PATH];
 	BOOL bResult;
 
@@ -36,7 +36,7 @@ End:
 
 HRESULT WINAPI DllUnregisterServer(void)
 {
-	CRegistry Reg(HKEY_CURRENT_USER);
+	CRegistry Reg(HKEY_LOCAL_MACHINE);
 	BOOL bRet = Reg.DeleteKey(HKEY_LOCAL_MACHINE, CtepCommClientSubKey);
 	if ( !bRet)
 		return SELFREG_E_CLASS;

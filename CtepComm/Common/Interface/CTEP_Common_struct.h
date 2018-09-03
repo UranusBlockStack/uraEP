@@ -6,6 +6,7 @@
 
 #include <windef.h>
 #include <tchar.h>
+#include <ws2ipdef.h>
 #include "CTEP_Trans_Packet_Protocol.h"
 
 #define READWRITE_DATA	// 描述一个可读写的数据
@@ -114,6 +115,9 @@ public:
 		Status		= User_Invalid;
 
 		guidUser	= GUID_NULL;
+
+		ZeroObject(addrLocal6);
+		ZeroObject(addrRemote6);
 	}
 
 	USHORT			UserId;					// -1表示无效
@@ -123,6 +127,18 @@ public:
 	GUID			guidUser;
 	EmUserType		Type;
 	EmUserStatus	Status;
+
+	union
+	{
+		SOCKADDR_IN  addrLocal;			// 连接的本地地址
+		SOCKADDR_IN6 addrLocal6;			// 连接的本地地址
+	};
+
+	union
+	{
+		SOCKADDR_IN addrRemote;			// 连接的远程地址
+		SOCKADDR_IN6 addrRemote6;			// 连接的远程地址
+	};
 };
 
 // 描述一个包操作类型
