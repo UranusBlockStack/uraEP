@@ -3,13 +3,7 @@
 #include "CommonInclude/CommonImpl.h"
 #include "CommonInclude/Tools/FastQueue.h"
 
-#include "Interface/CTEP_Communicate_App_Interface.h"
-#include "Interface/CTEP_Communicate_TransferLayer_Interface.h"
-#include "Interface/CTEP_Trans_Packet_Protocol.h"
-
-#include "Interface/CTEP_Common_Struct_Ex.h"
-
-#include "../LoadModules.h"
+#include "../LoadModulesServer.h"
 
 #include <winsock2.h>
 #include <windows.h>
@@ -22,23 +16,22 @@ using namespace ATL;
 
 
 class CIOCPServer : public ICTEPTransferProtocolCallBack
-	, public CLoadModules
+	, public CLoadModulesServer
 {
 protected:
 	static Log4CppLib m_log;
 
 public:
 //interface ICTEPTransferProtocolCallBack
-	virtual HANDLE GetCompletePort() override {return m_hCompletion;}	// 返回完成端口句柄
-	//virtual HANDLE GetListenEvent() override {return ;}
-	virtual ReadWritePacket* AllocatePacket(ICTEPTransferProtocolServer* pI) override 
+	_VIRT(HANDLE) GetCompletePort() override {return m_hCompletion;}	// 返回完成端口句柄
+	_VIRT(RWPacket*) AllocatePacket(ICTEPTransferProtocolServer* pI) override 
 	{
 		ReadWritePacket* pPacket = AllocateBuffer(0, OP_Empty, 0);
 		if ( pPacket)
 			pPacket->piTrans = pI;
 		return pPacket;
 	}
-	virtual void FreePacket(ReadWritePacket* p) override 
+	_VIRT_V FreePacket(ReadWritePacket* p) override 
 	{
 		ReleaseBuffer(p);
 	}
@@ -48,23 +41,18 @@ public:
 	~CIOCPServer();
 
 	// 开始服务
-	BOOL Start(int nMaxConnections = 5000, int nMaxFreeBuffers = 2000);
+	BOOL Start();
 	// 停止服务
 	void Shutdown();
 
 	// 关闭一个连接和关闭所有连接
 	void CloseAConnection(CTransferChannelEx *pContext);
-	void CloseAllConnections();
+	//void CloseAllConnections();
 
 	// 取得当前的连接数量
-	ULONG GetCurrentConnection()
-	{
-		//LOCK(&m_lcklstConnection);
-		return m_lstConnection.GetCount();
-	}
+	virtual ULONG GetCurrentConnection() = 0;	// { return (ULONG)m_lstConnection.GetCount();}
 
-	// 向指定客户发送文本
-	BOOL SendText(CTransferChannelEx *pContext, char *pszText, int nLen, EmPacketLevel level = Middle);
+	// 向指定连接发送数据
 	BOOL SendPacket(CTransferChannelEx *pContext, ReadWritePacket* pBuffer, EmPacketLevel level/* = Middle*/);
 
 protected:
@@ -81,7 +69,7 @@ protected:
 	void FreeContexts();
 
 	// 向连接列表中添加一个连接
-	BOOL AddAConnection(CTransferChannelEx *pContext);
+	//BOOL AddAConnection(CTransferChannelEx *pContext);
 
 	// 插入和移除未决的接受请求
 	BOOL InsertPendingAccept(ReadWritePacket *pBuffer);
@@ -94,22 +82,22 @@ protected:
 
 // 事件通知函数
 	// 建立了一个新的连接
-	virtual void OnConnectionEstablished(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
+	_VIRT_V OnConnectionEstablished(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
 	// 一个连接关闭
-	virtual void OnConnectionClosing(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
+	_VIRT_V OnConnectionClosing(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
 	// 在一个连接上发生了错误
-	virtual BOOL OnConnectionError(CTransferChannelEx * /*pContext*/, ReadWritePacket * /*pBuffer*/, int /*nError*/){return FALSE;}
+	_VIRT_B OnConnectionError(CTransferChannelEx * /*pContext*/, ReadWritePacket * /*pBuffer*/, int /*nError*/){return FALSE;}
 	// 一个连接上的读操作完成
-	virtual void OnReadCompleted(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
+	_VIRT_V OnReadCompleted(CTransferChannelEx *pContext, ReadWritePacket *pBuffer) = 0;
 	// 服务器启动
-	virtual BOOL OnStart() = 0;
+	_VIRT_B OnStart() = 0;
 	// 服务器关闭
-	virtual void OnShutdown() = 0;
+	_VIRT_V OnShutdown() = 0;
 
 protected:
 	// 通道发送分级结构信息
-#define MQUE_MAX_SEND	500
-#define MQUE_MIN_SEND	100
+#define MQUE_MAX_SEND	500		//当未完成的写请求数量超过这个值时启动<发送等级队列>,所有包先进队列然后等待发送
+#define MQUE_MIN_SEND	100		//当未完成的写请求数量地狱这个值时关闭<发送等级队列>,所有包直接在网络上发送
 	MutliPriorityQueue<ReadWritePacket> m_mqueSendPriority;
 	ThreadLock							m_mqueSPLock;
 
@@ -122,8 +110,8 @@ protected:
 	FastQueue<ReadWritePacket> m_quePendingAccepts;   // 抛出请求列表。
 
 	// 记录已经建立的连接列表
-	CAtlList<CTransferChannelEx*> m_lstConnection;
-	CMyCriticalSection           m_lcklstConnection;
+	//CAtlList<CTransferChannelEx*> m_lstConnection;
+	//CMyCriticalSection           m_lcklstConnection;
 
 	// 记录等待执行同步读取操作的列表
 	MISOQueue<CTransferChannelEx> m_queSyncRead;

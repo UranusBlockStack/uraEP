@@ -1,0 +1,8 @@
+LIBRARY
+
+EXPORTS
+	CrossAppGetInstance
+	CrossAppRelease
+
+
+

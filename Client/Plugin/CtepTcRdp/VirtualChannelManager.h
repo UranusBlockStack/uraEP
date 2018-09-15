@@ -41,7 +41,6 @@ public:
 		m_piCallBack->FreePacket(pPacket);
 	}
 	void CloseChannelByInitHandle(LPVOID pInitHandle);
-	int GetTCPLocalProcessInfo(in_addr *IpLocalAddr,in_addr *IpRemoteAddr,DWORD *dwCurPid);
 	VIRTUAL_CHANNEL_ITEM* GetChannel();
 
 private:

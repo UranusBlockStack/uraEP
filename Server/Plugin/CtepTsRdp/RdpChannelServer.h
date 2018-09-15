@@ -18,11 +18,11 @@ public:
 	static BOOL       RdpChannelCanceIO(HANDLE m_hChannel);
 };
 
-
-
 ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer();
-BOOL CtepTsRdpMainThreadInit();
-void CtepTsRdpMainThreadClose();
+
+// CallBack Session Event;
+void WINAPI CallSessionEvent(void *pParam, WPARAM wParam, LPARAM lParam);
+
 
 struct StListenData
 {
@@ -30,7 +30,6 @@ struct StListenData
 	DWORD  dwSessionId;
 	HANDLE hRdpChannel;
 };
-
 
 extern ICTEPTransferProtocolCallBack* m_piCallBack;
 extern CAtlMap<DWORD, CTransferChannel* > g_mapSessionData;

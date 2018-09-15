@@ -2,13 +2,13 @@
 #include "CommonInclude/Regedit/RegEdit.cpp"
 
 
-LPCWSTR subkey = L"Software\\Microsoft\\CloudTimes\\CtepTcCtvp";
+LPCWSTR subkey = L"Software\\CloudTimes\\CtepTcCtvp";
 LPCWSTR keyname = L"Name";
 
 STDAPI DllRegisterServer(void)
 {
 	HRESULT hr = SELFREG_E_CLASS;
-	CRegistry Reg(HKEY_CURRENT_USER);
+	CRegistry Reg(HKEY_LOCAL_MACHINE);
 	WCHAR path[MAX_PATH];
 
 	int dwRet = GetModuleFileName(GetSelfModuleHandle(), path, MAX_PATH);
@@ -35,7 +35,7 @@ End:
 STDAPI DllUnregisterServer(void)
 {
 	HRESULT hr = SELFREG_E_CLASS;
-	CRegistry Reg(HKEY_CURRENT_USER);
+	CRegistry Reg(HKEY_LOCAL_MACHINE);
 
 	BOOL bRet;
 	bRet = Reg.DeleteKey(HKEY_CURRENT_USER, subkey);

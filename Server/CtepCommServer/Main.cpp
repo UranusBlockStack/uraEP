@@ -5,7 +5,11 @@
 #include <Locale.h>
 #include "CommonInclude/ServiceImpl.h"
 #include "CommonInclude/MainImpl.h"
+#include "CommonInclude/Tools/MoudlesAndPath.h"
 
+// #include "CommonInclude/Tools/FirewallConfig.h"
+// #include "CommonInclude/Tools/FirewallConfig.cpp"
+#include "CommonInclude/Tools/WindowsFirewallException.h"
 
 BOOL WINAPI HandlerRoutine(__in  DWORD dwCtrlType);
 
@@ -21,13 +25,15 @@ public:
 		ASSERT(bRet);
 #endif // _DEBUG
 	}
-	virtual HRESULT STDMETHODCALLTYPE RunStop()
+
+public:
+	_VIRT_H STDMETHODCALLTYPE RunStop() override
 	{
 		Shutdown();
 		return S_OK;
 	}
 
-	virtual DWORD	_upStartRunService(DWORD argc, LPTSTR *argv)
+	_VIRT_D	_upStartRunService(DWORD argc, LPTSTR *argv) override
 	{
 		UNREFERENCED_PARAMETER(argc);
 		UNREFERENCED_PARAMETER(argv);
@@ -35,11 +41,30 @@ public:
 	}
 
 #ifdef _DEBUG
-	virtual DWORD   STDMETHODCALLTYPE RunRun()
+	_VIRT_D   STDMETHODCALLTYPE RunRun() override
 	{
 		return _upStartRunService(0, 0);
 	}
 #endif // _DEBUG
+
+	// -Install
+	_VIRT_H STDMETHODCALLTYPE InstallService(DWORD dwArgc, LPTSTR *lpszArgv) override
+	{
+		HRESULT hr = __super::InstallService(dwArgc, lpszArgv);
+		if ( SUCCEEDED(hr))
+		{
+			// 添加防火墙
+			CWindowsFirewallExcept wfe;
+			if ( SUCCEEDED(wfe.Initialize()))
+			{
+				wfe.AddApp(L"CTEP Foundation Architecture");
+				wfe.Cleanup();
+			}
+		}
+
+		return hr;
+	}
+
 };
 CMyObjectSolid<CSimpleMain<CMyService>> gOneApp;
 

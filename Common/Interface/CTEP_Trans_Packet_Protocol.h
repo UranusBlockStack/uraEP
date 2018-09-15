@@ -1,24 +1,33 @@
-#pragma once
+ï»¿#pragma once
 
 #include <windef.h>
 #include <winsock2.h>
 
 #pragma pack(push, 1)
+#pragma warning(push)
+#pragma warning(disable:4200)	//warning C4200: ä½¿ç”¨äº†éžæ ‡å‡†æ‰©å±• : ç»“æž„/è”åˆä¸­çš„é›¶å¤§å°æ•°ç»„
+#pragma warning(disable:4482) //warning C4482: ä½¿ç”¨äº†éžæ ‡å‡†æ‰©å±•: é™å®šåä¸­ä½¿ç”¨äº†æžšä¸¾â€œâ€
+
 struct CTEPPacket_Header;
 struct CTEPPacket_Init;
 struct CTEPPacket_Init_Responce;
 struct CTEPPacket_Message;
 
-#pragma warning(disable:4482) //warning C4482: Ê¹ÓÃÁË·Ç±ê×¼À©Õ¹: ÏÞ¶¨ÃûÖÐÊ¹ÓÃÁËÃ¶¾Ù¡°¡±
 
-//#define CTEP_OPTIONAL		// ¿ÉÑ¡²ÎÊý,Ä³Ð©Ìõ¼þÏÂÃ»ÓÐ
+// CTEP CROSSAPP Server PipeName.
+#define CTEPTS_CROSSAPP_PIPE_NAME_TEMPLATE		TEXT("\\\\.\\pipe\\ExtensionProtocolTransSvrCrossApp")
 
-#define CTEP_DEFAULT_BUFFER_SIZE		(4096*4-80)		// I/OÇëÇóµÄ»º³åÇø´óÐ¡, RDPÍ¨µÀÔÚ½Ï´ó´óÐ¡Ê±»á¶ªÊ§Êý¾Ý
-#define CTEP_DEFAULT_BUFFER_DATA_SIZE	(CTEP_DEFAULT_BUFFER_SIZE - sizeof(CTEPPacket_Message))
+#define CTEP_OPTIONAL									// å¯é€‰å‚æ•°,æŸäº›æ¡ä»¶ä¸‹æ²¡æœ‰
+#define INVALID_ACID					((USHORT)-1)	// æ— æ•ˆçš„AppChannelIdæ•°å€¼,åŒ…æ‹¬StaticChannel, DynamicChannel, CrossAppChannel
+#define INVALID_UID						((USHORT)-1)	// æ— æ•ˆçš„UserIdæ•°å€¼,åŒ…æ‹¬Sessionç›¸å…³Userä¸ŽSessionæ— å…³User.
+#define INVALID_SESSIONID				((DWORD)-1)		// æ— æ•ˆçš„windows Session Id.
+
+#define CTEP_DEFAULT_BUFFER_SIZE		(4096-80)		// I/Oè¯·æ±‚çš„ç¼“å†²åŒºå¤§å°, è¡¨ç¤ºä¸€æ¬¡IOåŒ…çš„æœ€å¤§å…è®¸é•¿. RDPé€šé“åœ¨è¾ƒå¤§å¤§å°æ—¶ä¼šä¸¢å¤±æ•°æ®
+#define CTEP_DEFAULT_BUFFER_DATA_SIZE	(CTEP_DEFAULT_BUFFER_SIZE - sizeof(CTEPPacket_Message))	// ä¸€æ¬¡CTEPPacket_MessageåŒ…é‡Œæœ€å¤§å¯ä»¥åŒ…å«çš„æ•°æ®é•¿åº¦
 #define CTEP_PACKET_HEADER_SIZE			8
 #define CTEP_MAX_APPNAME_LENGTH			16	//include tail '\0'
 
-struct CTEPPacket_Header	// sizeof(this) == 8
+struct CTEPPacket_Header	// sizeof(this) == 8 + 4
 {
 // Data Define
 	WORD  PacketLength;		// include this header.
@@ -44,10 +53,13 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_STATIC		(0x80|CTEP_PACKET_SEGMENT_ENTIRE)
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_BROADCAST		(0x90|CTEP_PACKET_SEGMENT_ENTIRE)
 #define CTEP_PACKET_CONTENT_MSG_LOCAL_SPECIAL		(0xA0|CTEP_PACKET_SEGMENT_ENTIRE)
+
+#define CTEP_PACKET_CONTENT_INITCROSSAPP			CTEP_PACKET_CONTENT_INIT			//CTEP v2.0
+#define CTEP_PACKET_CONTENT_INITCROSSAPP_RSP		CTEP_PACKET_CONTENT_INIT_RSP		//CTEP v2.0
 	BYTE  Type;
 
-	WORD  UserId;			// User Id (0~65534), (WORD)-1 is invalid.
-	WORD  AppChannelId;		// 0~65534, (WORD)-1 is invalid.
+	WORD  UserId;			// User Id (0~65534), INVALID_UID is invalid.
+	WORD  AppChannelId;		// 0~65534, INVALID_ACID is invalid.
 
 	DWORD SequenceId;
 
@@ -79,11 +91,11 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 // Function Define
 	inline bool InvalidUserId()
 	{
-		return UserId == (WORD)-1;
+		return UserId == INVALID_UID;
 	}
 	inline bool InvalidAppChannelId()
 	{
-		return AppChannelId == (WORD)-1;
+		return AppChannelId == INVALID_ACID;
 	}
 
 	inline bool EntirePacket()
@@ -152,6 +164,8 @@ struct CTEPPacket_Header	// sizeof(this) == 8
 		return AppChannelId;
 	}
 };
+#define CTEPPacketGetSize(pPacket)		(((CTEPPacket_Header*)(pPacket))->PacketLength)
+
 inline int Create_CTEPPacket_Header(CTEPPacket_Header* pBuffer, USHORT PacketLength, BYTE type
 	, WORD UserId, WORD AppId)
 {
@@ -170,6 +184,12 @@ struct CTEPPacket_Hello
 	// Type : CTEP_PACKET_CONTENT_HELLO / CTEP_PACKET_CONTENT_HELLO_RSP
 	CTEPPacket_Header	header;
 	WCHAR				msg[32];
+
+	bool IsPacketHello()
+	{
+		return  header.PacketLength == sizeof(CTEPPacket_Hello)
+			&& (header.IsHello() || header.IsHelloRsp());
+	}
 };
 inline int Create_CTEPPacket_Hello(CTEPPacket_Hello* pBuffer, LPCWSTR msg, BOOL bResponse = TRUE)
 {
@@ -180,7 +200,7 @@ inline int Create_CTEPPacket_Hello(CTEPPacket_Hello* pBuffer, LPCWSTR msg, BOOL 
 	wcscpy_s(pBuffer->msg, 31, msg);
 	pBuffer->msg[31] = 0;
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
-		, sizeof(CTEPPacket_Hello), type, (WORD)-1, (WORD)-1);
+		, sizeof(CTEPPacket_Hello), type, INVALID_UID, INVALID_ACID);
 }
 
 
@@ -195,6 +215,7 @@ struct CTEPPacket_Init
 
 	// GUID_Emply(CTEP_PACKET_CONTENT_INIT_MASTER) or Server User Session Guid.
 	GUID				guidUserSession;
+	WCHAR				wsUserName[260];
 
 	inline bool IsPacketInit()
 	{
@@ -203,11 +224,20 @@ struct CTEPPacket_Init
 	}
 };
 inline int Create_CTEPPacket_Init(CTEPPacket_Init* pBuffer
-	, USHORT UserIdAttached = (USHORT)-1, const GUID& guid = GUID_NULL)
+	, USHORT UserIdAttached = INVALID_UID, const GUID& guid = GUID_NULL
+	, WCHAR UserName[260] = nullptr)
 {
 	pBuffer->guidUserSession = guid;
+	if ( UserName)
+	{
+		wcscpy_s(pBuffer->wsUserName, UserName);
+	}
+	else
+	{
+		pBuffer->wsUserName[0] = NULL;
+	}
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
-		, sizeof(CTEPPacket_Init), CTEP_PACKET_CONTENT_INIT, UserIdAttached, (WORD)-1);
+		, sizeof(CTEPPacket_Init), CTEP_PACKET_CONTENT_INIT, UserIdAttached, INVALID_ACID);
 }
 
 struct CTEPPacket_Init_Responce
@@ -226,7 +256,6 @@ struct CTEPPacket_Init_Responce
 	USHORT				UdpPort;
 
 	DWORD				IPv4Count;
-#pragma warning(suppress:4200)	//warning C4200: Ê¹ÓÃÁË·Ç±ê×¼À©Õ¹ : ½á¹¹/ÁªºÏÖÐµÄÁã´óÐ¡Êý×é
 	IN_ADDR				IPv4[0];
 
 	inline bool IsPacketInitRsp()
@@ -251,16 +280,16 @@ inline int Create_CTEPPacket_Init_Responce(CTEPPacket_Init_Responce* pBuffer, US
 	}
 	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
 								  , (USHORT)(sizeof(CTEPPacket_Init_Responce)+sizeof(IN_ADDR)*ipv4Count)
-								  , CTEP_PACKET_CONTENT_INIT_RSP, UserId, (USHORT)-1);
+								  , CTEP_PACKET_CONTENT_INIT_RSP, UserId, INVALID_ACID);
 }
 
 struct CTEPPacket_Message
 {
 	// Type : CTEP_PACKET_CONTENT_MESSAGE | CTEP_PACKET_SEGMENT_???
 	CTEPPacket_Header	header;
-	DWORD entireLength;	// NeedAssemble() == true
-#pragma warning(suppress:4200)	//warning C4200: Ê¹ÓÃÁË·Ç±ê×¼À©Õ¹ : ½á¹¹/ÁªºÏÖÐµÄÁã´óÐ¡Êý×é
-	CHAR				data[0];
+
+	CTEP_OPTIONAL DWORD		entireLength;	// NeedAssemble() == true
+	CHAR					data[0];
 
 	inline bool IsPacketMessage()
 	{
@@ -334,7 +363,7 @@ inline int Create_CTEPPacket_Message(CTEPPacket_Message* pBuffer, USHORT UserId,
 
 struct CTEPPacket_CreateApp
 {
-	CTEPPacket_Header	header;		// ´´½¨¾²Ì¬Í¨µÀÊ±AppChannelId = -1, ´´½¨¶¯Ì¬Í¨µÀÊ±AppChannelIdÎª¶ÔÓ¦¾²Ì¬Í¨µÀµÄÍ¨µÀID
+	CTEPPacket_Header	header;		// åˆ›å»ºé™æ€é€šé“æ—¶AppChannelId = -1, åˆ›å»ºåŠ¨æ€é€šé“æ—¶AppChannelIdä¸ºå¯¹åº”é™æ€é€šé“çš„é€šé“ID
 	ULONG64				Key;
 	USHORT				uPacketOption;
 	USHORT				ePacketLevel;
@@ -353,12 +382,12 @@ inline int Create_CTEPPacket_CreateApp(CTEPPacket_CreateApp *pBuffer, USHORT Use
 }
 struct CTEPPacket_CreateAppRsp
 {
-	CTEPPacket_Header	header;		//AppChannelIdÄÚ±£´æ±»´´½¨µÄÓ¦ÓÃÍ¨µÀId
+	CTEPPacket_Header	header;		//AppChannelIdå†…ä¿å­˜è¢«åˆ›å»ºçš„åº”ç”¨é€šé“Id
 	ULONG64				Key;
 	USHORT				uPacketOption;
 	USHORT				ePacketLevel;
 	char				AppName[16];
-	USHORT				StaticAppChannelId;	// ±£´æ±»´´½¨Ó¦ÓÃËù¶ÔÓ¦¾²Ì¬Í¨µÀµÄID, Èç¹û´´½¨µÄÊÇ¾²Ì¬Í¨µÀ,ÄÇÃ´IDÎªËü±¾Éí or (USHORT)-1
+	USHORT				StaticAppChannelId;	// ä¿å­˜è¢«åˆ›å»ºåº”ç”¨æ‰€å¯¹åº”é™æ€é€šé“çš„ID, å¦‚æžœåˆ›å»ºçš„æ˜¯é™æ€é€šé“,é‚£ä¹ˆIDä¸ºå®ƒæœ¬èº« or INVALID_ACID
 	USHORT				bResult;	// 1:TRUE, 0:FALSE
 };
 inline int Create_CTEPPacket_CreateAppRsp(CTEPPacket_CreateAppRsp *pBuffer, USHORT UserId, USHORT AppId
@@ -387,14 +416,67 @@ struct CTEPPacket_CloseAppRsp
 };
 
 
+// 
+// CTEP 2.0 new type:
+// 
 
+// this packet is send from CTEP-Server-Out-Process-App to CTEP-Server
+struct CTEPPacket_InitCrossApp
+{
+	// PacketLength = sizeof(CTEPPacket_InitCrossApp)
+	// Type : CTEP_PACKET_CONTENT_INITCROSSAPP
+	CTEPPacket_Header	header;
+	DWORD				dwSessionId;
+	CHAR				sAppName[16];
+
+	inline bool IsPacketInitCrossApp()
+	{
+		return  header.PacketLength == sizeof(CTEPPacket_InitCrossApp)
+			&& header.IsInit();
+	}
+};
+inline int Create_CTEPPacket_InitCrossApp(CTEPPacket_InitCrossApp* pPacket
+	, const CHAR AppName[16], DWORD SessionId)
+{
+	pPacket->dwSessionId = SessionId;
+	strcpy_s(pPacket->sAppName, AppName);
+	return Create_CTEPPacket_Header((CTEPPacket_Header*)pPacket
+		, sizeof(CTEPPacket_InitCrossApp), CTEP_PACKET_CONTENT_INIT, INVALID_UID, INVALID_ACID);
+}
+
+// this packet is send from CTEP-Server to CTEP-Server-Out-Process-App
+struct CTEPPacket_InitCrossApp_Responce
+{
+	// PacketLength = sizeof(CTEPPacket_InitCrossApp_Responce)
+	// UserId: 0~65534
+	// AppChannelId: 0~65534
+	// Type : CTEP_PACKET_CONTENT_INIT_RSP
+	CTEPPacket_Header	header;
+
+	// Server User Guid.
+	GUID				guidUserSession;
+
+	inline bool IsPacketInitCrossAppRsp()
+	{
+		return  header.PacketLength == sizeof(CTEPPacket_InitCrossApp_Responce)
+			 && header.IsInitRsp();
+	}
+};
+
+inline int Create_CTEPPacket_InitCrossApp_Responce(CTEPPacket_InitCrossApp_Responce* pBuffer
+								, USHORT AppChannelId, USHORT UserId, const GUID& guidUser)
+{
+	pBuffer->guidUserSession = guidUser;
+	return Create_CTEPPacket_Header((CTEPPacket_Header*)pBuffer
+		, (USHORT)sizeof(CTEPPacket_InitCrossApp_Responce)
+		, CTEP_PACKET_CONTENT_INIT_RSP, UserId, AppChannelId);
+}
 
 
 
 
 #pragma pack(pop)
-
-
+#pragma warning(pop)
 
 
 

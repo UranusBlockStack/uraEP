@@ -72,79 +72,97 @@ inline int GetRaidNormal()
 	return dwSizeSend;
 }
 
-class MyTestApp : public ICTEPAppProtocol
+
+DWORD g_dwType;			// 记录工作在服务器模式还是客户端模式
+enum CTEPAPPTEST_WORKMODE
+{
+	UploadApp,
+	DownloadApp,
+	random,
+	extreme,
+};
+
+CTEPAPPTEST_WORKMODE mode = extreme;
+
+int GetRaid()
+{
+	if ( mode == random)
+	{
+		return GetRaidNormal();
+	}
+	if ( mode == extreme)
+	{
+		return rand()+ 5;
+	}
+
+	if ( g_dwType & CTEP_TYPE_APP_SERVER)
+	{
+		if ( mode == DownloadApp)
+			return rand()+ 5;
+	}
+	else
+	{
+		if ( mode == UploadApp)
+			return rand() + 5;
+	}
+
+	return 256;
+}
+
+
+class MyTestApp : public ICTEPAppProtocolEx
 {
 private:
 	Log4CppLib m_log;
 	ICTEPAppProtocolCallBack* m_piAPC;
 
-	DWORD m_dwType;
-
-	int GetRaid()
-	{
-		DWORD dwSizeSend;
-		if ( mode == random)
-		{
-			return GetRaidNormal();
-		}
-		if ( mode == extreme)
-		{
-			return rand()+ 5;
-		}
-
-		if ( m_dwType & CTEP_TYPE_APP_SERVER)
-		{
-			if ( mode == DownloadApp)
-				return rand()+ 5;
-		}
-		else
-		{
-			if ( mode == UploadApp)
-				return rand() + 5;
-		}
-
-		dwSizeSend = 256;
-
-		return dwSizeSend;
-	}
-
-	enum{
-		UploadApp,
-		DownloadApp,
-		random,
-		extreme,
-	}mode;
-
 public:
-	MyTestApp():m_piAPC(nullptr), m_log("TstApp")
-	{
-		mode = extreme;
-	}
+	MyTestApp():m_piAPC(nullptr), m_log("TstApp")	{}
 
-	virtual LPCSTR   GetName() override	{	return "TestApp";}// AppName character count <= 15
-	virtual DWORD    GetNameCount() override {return 1;}
-	virtual LPCSTR   GetNameIndex(long iIndex = 0) override	// AppName character count <= 15, 用于Proxy支持多个App的代理使用
+	_VIRT(LPCSTR)   GetName() override	{	return "TestApp";}// AppName character count <= 15
+	_VIRT_D    GetInterfaceVersion() override {return 1;} //默认返回0, ICTEPAppProtocolEx接口返回1,
+	
+	_VIRT_D    GetNameCount() override {return 1;}
+	_VIRT(LPCSTR)   GetNameIndex(long iIndex = 0) override	// AppName character count <= 15, 用于Proxy支持多个App的代理使用
 	{
-		if ( iIndex == 0)
-			return GetName();
+		if ( iIndex == 0)return GetName();
 		return "";
 	}
 
-	virtual HRESULT  Initialize(ICTEPAppProtocolCallBack* pI, DWORD dwType) override
+	//Comm模块询问App模块指定静态通道是否可以被关闭了,可以返回TRUE, 拒绝关闭返回FALSE
+	_VIRT_B     QueryDisconnect(CUserData* pUser, CAppChannel *pAppChannel) override
 	{
-		m_dwType = dwType;
+		return TRUE;
+	}
+	
+	//Comm模块通知App模块指定通道的状态发生改变(Connected, Disconnected)
+	_VIRT_V     ChannelStateChanged(CUserData* pUser, CAppChannel *pAppChannel) override
+	{
+		;
+	}
+
+	_VIRT_H  Initialize(ICTEPAppProtocolCallBack* pI, DWORD dwType) override
+	{
+		g_dwType = dwType;
 		srand(GetTickCount());
 		ASSERT(m_piAPC == nullptr);
 		m_piAPC = pI;
 		return S_OK;
 	}
-	virtual void	 Final() override	// server close.
+	_VIRT_V	 Final() override	// server close.
 	{
 		ASSERT(m_piAPC != nullptr);
 		m_piAPC = nullptr;
 	}
 
-	virtual HRESULT  Connect(   CUserData* pUser, CAppChannel *pNewAppChannel, CAppChannel *pStaticAppChannel/* = nullptr*/)
+	_VIRT_B     ConnectCrossApp(CUserData* pUser, CAppChannel* pNewAppChannel
+		, CAppChannel *pStaticAppChannel) override
+	{
+		return FALSE;
+	}
+
+	_VIRT_H  Connect(   CUserData* pUser, CAppChannel *pNewAppChannel
+		, CAppChannel *pStaticAppChannel/* = nullptr*/) override
 	{
 		pNewAppChannel->pAppParam = new PerUserApp();
 		PerUserApp* pUA = (PerUserApp*)pNewAppChannel->pAppParam;
@@ -152,7 +170,7 @@ public:
 		m_log.FmtMessage(5, L"Connect. AppChannelId: %d [%d] Master:%d"
 			, pNewAppChannel->AppChannelId, pNewAppChannel->Type, pStaticAppChannel ? pStaticAppChannel->AppChannelId : -1);
 
-		if ( !(m_dwType&CTEP_TYPE_APP_SERVER) || mode == extreme)
+		if ( !(g_dwType&CTEP_TYPE_APP_SERVER) || mode == extreme)
 		{
 			DWORD dwSizeSend = GetRaid();
 			PerBag *pBag = (PerBag *)pUA->buff;
@@ -165,7 +183,8 @@ public:
 		}
 		return S_OK;
 	}
-	virtual HRESULT  ReadPacket(CUserData* pUser, CAppChannel *pAppChannel, char* pBuff, ULONG size)
+	_VIRT_H  ReadPacket(CUserData* pUser, CAppChannel *pAppChannel
+		, char* pBuff, ULONG size) override
 	{
 		PerUserApp* pUA = (PerUserApp*)pAppChannel->pAppParam;
 		PerBag *pBagRecv = (PerBag *)pBuff;
@@ -173,7 +192,8 @@ public:
 		if ( !pUA)
 			return E_FAIL;
 
-		m_log.print(L"ReadPacket %d[%d] data:%d size:%d", pAppChannel->AppChannelId, pAppChannel->Type, pBagRecv->dwSequenceLocal, size);
+		m_log.print(L"ReadPacket %d[%d] data:%d size:%d"
+			, pAppChannel->AppChannelId, pAppChannel->Type, pBagRecv->dwSequenceLocal, size);
 		ASSERT(size >= 4);
 		ASSERT(pBagRecv->dwBagSize + sizeof(PerBag) == size);
 		ASSERT(pBagRecv->buf[pBagRecv->dwBagSize-4] == 0);
@@ -195,7 +215,9 @@ public:
 		{
 			pBag = (PerBag *)pUA->buff;
 			dwSizeSend = pBag->SetSize(dwSizeSend);
-			m_log.print(L"SendPacket %d[%d]   data:%d size:%d", pAppChannel->AppChannelId, pAppChannel->Type, pBag->dwSequenceLocal, dwSizeSend);
+			m_log.print(L"SendPacket %d[%d]   data:%d size:%d"
+				, pAppChannel->AppChannelId, pAppChannel->Type
+				, pBag->dwSequenceLocal, dwSizeSend);
 			HRESULT hr = m_piAPC->WritePacket(pAppChannel, (char*)pBag, dwSizeSend);
 		}
 		else
@@ -204,7 +226,9 @@ public:
 			pBag = (PerBag *)pBuffer->pointer;
 			pBag->dwSequenceLocal = pUA->dwSequenceLocal;
 			dwSizeSend = pBag->SetSize(dwSizeSend);
-			m_log.print(L"SendPacket %d[%d]   data:%d size:%d", pAppChannel->AppChannelId, pAppChannel->Type, pBag->dwSequenceLocal, dwSizeSend);
+			m_log.print(L"SendPacket %d[%d]   data:%d size:%d"
+				, pAppChannel->AppChannelId, pAppChannel->Type
+				, pBag->dwSequenceLocal, dwSizeSend);
 			HRESULT hr = m_piAPC->WritePacket(pAppChannel, pBuffer);
 		}
 
@@ -217,7 +241,7 @@ public:
 				m_piAPC->CreateDynamicChannel(pAppChannel, Low);
 			}
 		}
-		else if ( pAppChannel->Type == DynamicChannel)
+		else if ( pAppChannel->Type == DynamicChannel || pAppChannel->Type == CrossDyncChannel)
 		{
 			if ( pUA->dwSequenceLocal > 20000)
 			{
@@ -227,7 +251,7 @@ public:
 
 		return S_OK;
 	}
-	virtual void	 Disconnect(CUserData* pUser, CAppChannel *pAppChannel)
+	_VIRT_V	 Disconnect(CUserData* pUser, CAppChannel *pAppChannel) override
 	{
 		m_log.FmtMessage(5, L"Disconnect App. AppId:%d[%s]", pAppChannel->AppChannelId, pAppChannel->debugType());
 

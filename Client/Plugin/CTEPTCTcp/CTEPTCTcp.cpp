@@ -4,12 +4,43 @@
 #include "stdafx.h"
 #include "CTEPTCTcp.h"
 
+class CTransProTcpClt : public ICTEPTransferProtocolClient
+{
+public:
+	CTransProTcpClt();
+	~CTransProTcpClt();
+
+public:
+	_VIRT(LPCSTR) GetName() override {return "TCP";}	// 返回传输协议名称;
+
+	_VIRT_H Initialize(ICTEPTransferProtocolClientCallBack* pI) override;
+	_VIRT_V Final() override;
+
+	_VIRT_H Connect(CTransferChannel* pTransChn, ReadWritePacket* pPacket = 0) override;
+	_VIRT_H Disconnect(CTransferChannel* pTransChn) override;// RDP返回: E_NOTIMPL
+
+	_VIRT_H Send(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	_VIRT_H Recv(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;	// TCP/UDP, RDP不支持,返回E_NOIMPL
+
+
+private:
+	Log4CppLib m_log;
+
+	USHORT m_uPort;
+	ICTEPTransferProtocolClientCallBack* m_piCallBack;
+
+	CTransferChannel* volatile m_pTransChn;
+
+	_LiMB::CMyCriticalSection lckSend;
+	_LiMB::CMyCriticalSection lckRecv;
+};
+
 CTransProTcpClt gOne;
 
 #define DEFAULT_PORT 4567
 
 
-ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClient()
+ICTEPTransferProtocolClient* WINAPI CTEPGetInterfaceTransClientTcp()
 {
 	return dynamic_cast<ICTEPTransferProtocolClient*>(&gOne);
 }
@@ -48,6 +79,7 @@ HRESULT CTransProTcpClt::Connect(CTransferChannel* pTransChn, ReadWritePacket* p
 	}
 
 	pTransChn->s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	ASSERT(pTransChn->s != INVALID_SOCKET);
 	if ( pTransChn->s == INVALID_SOCKET)
 		goto End;
 
@@ -72,11 +104,13 @@ HRESULT CTransProTcpClt::Connect(CTransferChannel* pTransChn, ReadWritePacket* p
 	if ( iRet != 0)
 	{
 		dwErr = WSAGetLastError();
+		hr = MAKE_WINDOWS_ERRCODE(dwErr);
 		goto End;
 	}
 
 	m_pTransChn = pTransChn;
-	m_piCallBack->Connected(pTransChn);
+	hr = m_piCallBack->Connected(pTransChn);
+	ASSERT(SUCCEEDED(hr));
 
 	if ( pPacket)
 	{
@@ -89,6 +123,13 @@ HRESULT CTransProTcpClt::Connect(CTransferChannel* pTransChn, ReadWritePacket* p
 End:
 	if ( FAILED(hr))
 	{
+		m_log.FmtError(5, L"Connect() failed. Ip:%d.%d.%d.%d:%d ErrCode:0x%08x"
+			, pTransChn->addrRemote.sin_addr.S_un.S_un_b.s_b1
+			, pTransChn->addrRemote.sin_addr.S_un.S_un_b.s_b2
+			, pTransChn->addrRemote.sin_addr.S_un.S_un_b.s_b3
+			, pTransChn->addrRemote.sin_addr.S_un.S_un_b.s_b4
+			, (DWORD)::ntohs(pTransChn->addrRemote.sin_port)
+			, hr);
 		m_pTransChn = nullptr;
 		closesocket(pTransChn->s);
 		pTransChn->s = INVALID_SOCKET;

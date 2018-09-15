@@ -4,9 +4,49 @@
 #include "stdafx.h"
 #include "CTEPTSTcp.h"
 
+#pragma warning(disable:4482)//warning C4482: 使用了非标准扩展: 限定名中使用了枚举“EmPacketOperationType”
+
+class CTransProTcpSvr : public ICTEPTransferProtocolServer
+{
+public:
+	CTransProTcpSvr();
+	~CTransProTcpSvr();
+
+public:
+	_VIRT(LPCSTR) GetName() override {return "TCP";}	// 返回传输协议名称;
+	_VIRT_D SupportIOCP() override{return CTEP_TS_SUPPORT_IOCP;}	// 是否支持完成端口模型
+	_VIRT(SOCKET) GetListenSocket() override;
+
+	_VIRT_H InitializeCompletePort(ICTEPTransferProtocolCallBack* piCallBack) override;
+	_VIRT_H PostListen(bool bFirst = false) override;
+
+	_VIRT_H PostRecv(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	_VIRT_H PostSend(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	_VIRT_H CompleteListen(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+
+	_VIRT_L CTransProTcpSvr::GetDuration(ReadWritePacket* pPacket) override;
+	_VIRT_H Disconnect(CTransferChannel* pTransChn, ReadWritePacket* pPacket) override;
+	_VIRT_V Final() override;
+
+	// Tcp/Rdp Only
+	_VIRT(WORD) GetPort() override {return m_uPort;}	// 返回TCP/RDP监听端口号
+
+private:
+	Log4CppLib m_log;
+
+	USHORT m_uPort;
+	ICTEPTransferProtocolCallBack* m_piCallBack;
+
+	SOCKET m_sListen;
+	CRITICAL_SECTION cs;
+	LPFN_ACCEPTEX m_lpfnAcceptEx;	// AcceptEx函数地址
+	LPFN_GETACCEPTEXSOCKADDRS m_lpfnGetAcceptExSockaddrs; // GetAcceptExSockaddrs函数地址
+};
+
+
 CTransProTcpSvr gOne;
 
-ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServer()
+ICTEPTransferProtocolServer* WINAPI CTEPGetInterfaceTransServerTcp()
 {
 	return dynamic_cast<ICTEPTransferProtocolServer*>(&gOne);
 }
@@ -216,9 +256,10 @@ HRESULT CTransProTcpSvr::PostRecv(CTransferChannel* pTransChn, ReadWritePacket* 
 	WSABUF buf = {pPacket->buff.maxlength, pPacket->buff.buff};
 	if(::WSARecv(pTransChn->s, &buf, 1, 0, &dwFlags, &pPacket->ol, NULL) != NO_ERROR)
 	{
-		if(::WSAGetLastError() != WSA_IO_PENDING)
+		DWORD dwErr = ::WSAGetLastError();
+		if( dwErr != WSA_IO_PENDING)
 		{
-			return E_FAIL;
+			return MAKE_WINDOWS_ERRCODE(dwErr);
 		}
 
 		return ERROR_IO_PENDING;
@@ -266,7 +307,7 @@ HRESULT CTransProTcpSvr::CompleteListen(CTransferChannel* pTransChn, ReadWritePa
 	int nLocalLen, nRmoteLen;
 	LPSOCKADDR pLocalAddr, pRemoteAddr;
 
-	pTransChn->type = TCP;
+	pTransChn->type = TransType_TCP;
 
 	m_lpfnGetAcceptExSockaddrs(
 		pPacket->buff.buff,

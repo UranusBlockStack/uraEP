@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "RdpTransferClient.h"
 
+#include "CommonInclude/Tools/AdapterInformation.h"
+
 CRdpTransferClient::CRdpTransferClient(PCHANNEL_ENTRY_POINTS pEntryPoints)
 	: CVirtualChannelManager(pEntryPoints), m_pTransChn(nullptr)
 	, m_log("TS_RDP")
@@ -34,21 +36,12 @@ HRESULT CRdpTransferClient::Connect(CTransferChannel* pTransChn, ReadWritePacket
 	HRESULT hr = S_OK;
 
 	ASSERT(m_pTransChn == nullptr);
-	DWORD pid;
-	in_addr in_AddrLocal = {0}, in_AddRemote = {0};
-	GetTCPLocalProcessInfo(&in_AddrLocal, &in_AddRemote, &pid);
-
-	pTransChn->addrLocal.sin_family = AF_INET;
-	pTransChn->addrLocal.sin_addr = in_AddrLocal;
-	pTransChn->addrLocal.sin_port = 0;
-
-	pTransChn->addrRemote.sin_family = AF_INET;
-	pTransChn->addrRemote.sin_addr = in_AddRemote;
-	pTransChn->addrRemote.sin_port = 0;
-
+	AdapterInfomation::GetTCPLocalProcessInfo(&pTransChn->addrLocal, &pTransChn->addrRemote, 1);
 	pTransChn->hFile = *(GetChannel()->m_phChannel);
 
 	m_pTransChn = pTransChn;
+
+	m_piCallBack->Connected(pTransChn);
 
 	if ( pPacket)
 	{
@@ -101,10 +94,9 @@ void CRdpTransferClient::RecvData(char *pbuff, DWORD size)
 }
 
 #include "CommonInclude/Tools/MoudlesAndPath.h"
-CRdpTransferClient *g_pRdpTransClient = nullptr;
-HMODULE g_hModule;
-FnCTEPCommClientInitalize g_fnInit;
-FnCTEPCommClientClose	  g_fnClose;
+CRdpTransferClient *		g_pRdpTransClient;
+FnCTEPCommClientInitalize	g_fnInit;
+FnCTEPCommClientClose		g_fnClose;
 
 //RDP通道的默认入口函数
 BOOL VCAPITYPE VirtualChannelEntry(PCHANNEL_ENTRY_POINTS pEntryPoints)
@@ -113,22 +105,26 @@ BOOL VCAPITYPE VirtualChannelEntry(PCHANNEL_ENTRY_POINTS pEntryPoints)
 	g_pRdpTransClient = new CRdpTransferClient(pEntryPoints);
 	ASSERT(g_pRdpTransClient);
 
-	WCHAR Path[MAX_PATH+1];
-	GetSelfDir(Path);
-	wcscat_s(Path, L"CtepCommClient.dll");
-	g_hModule = LoadLibrary(Path);
-	ASSERT(g_hModule);
-	if ( g_hModule)
+	static HMODULE hModule = nullptr;
+	if ( !hModule)
 	{
-		HRESULT hr = E_FAIL;
-		g_fnInit = (FnCTEPCommClientInitalize)GetProcAddress(g_hModule, "CTEPCommClientInitalize");
-		g_fnClose = (FnCTEPCommClientClose)GetProcAddress(g_hModule, "CTEPCommClientClose");
+		WCHAR Path[MAX_PATH+1];
+		GetSelfDir(Path);
+		wcscat_s(Path, L"CtepCommClient.dll");
+
+		hModule = LoadLibrary(Path);
+	}
+
+	ASSERT(hModule);
+	if ( hModule)
+	{
+		g_fnInit = GetFnCTEPCommClientInitalize(hModule);;
+		g_fnClose = GetFnCTEPCommClientClose(hModule);
 		ASSERT(g_fnInit && g_fnClose);
 		if ( g_fnInit && g_fnClose)
-		{
 			return TRUE;
-		}
 	}
+
 	delete g_pRdpTransClient;
 	g_pRdpTransClient = nullptr;
 
